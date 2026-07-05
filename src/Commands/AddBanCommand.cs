@@ -8,22 +8,8 @@ using SwiftlyS2.Shared.Players;
 
 namespace CS2_Admin.Commands;
 
-public class AddBanCommand : CommandBase
+public class AddBanCommand : BanCommandBase
 {
-    private readonly BanManager _banManager;
-    private readonly MuteManager _muteManager;
-    private readonly GagManager _gagManager;
-    private readonly WarnManager _warnManager;
-    private readonly AdminDbManager _adminDbManager;
-    private readonly PlayerIpDbManager _playerIpDbManager;
-    private readonly PlayerSessionManager _playerSessionManager;
-    private readonly RecentPlayersTracker _recentPlayersTracker;
-    private readonly DiscordBotService _discord;
-    private readonly SanctionMenuConfig _sanctions;
-    private readonly MultiServerConfig _multiServerConfig;
-    private readonly int _banType;
-    private readonly PlayerSanctionStateService _sanctionStateService;
-
     public AddBanCommand(
         ISwiftlyCore core,
         BanManager banManager,
@@ -45,21 +31,10 @@ public class AddBanCommand : CommandBase
         int banType,
         PlayerSanctionStateService sanctionStateService,
         PermissionService permissionService)
-        : base(core, permissions, commands, tags, messages, adminLogManager, permissionService)
+        : base(core, banManager, muteManager, gagManager, warnManager, adminDbManager, adminLogManager,
+            playerIpDbManager, playerSessionManager, recentPlayersTracker, discord, permissions, commands,
+            tags, messages, sanctions, multiServerConfig, banType, sanctionStateService, permissionService)
     {
-        _banManager = banManager;
-        _muteManager = muteManager;
-        _gagManager = gagManager;
-        _warnManager = warnManager;
-        _adminDbManager = adminDbManager;
-        _playerIpDbManager = playerIpDbManager;
-        _playerSessionManager = playerSessionManager;
-        _recentPlayersTracker = recentPlayersTracker;
-        _discord = discord;
-        _sanctions = sanctions;
-        _multiServerConfig = multiServerConfig;
-        _banType = banType is >= 1 and <= 3 ? banType : 1;
-        _sanctionStateService = sanctionStateService;
     }
 
     public override async void Execute(ICommandContext context)
@@ -105,46 +80,4 @@ public class AddBanCommand : CommandBase
         }
     }
 
-    private bool ResolveGlobalMode()
-    {
-        if (!_multiServerConfig.Enabled)
-        {
-            return false;
-        }
-
-        return _multiServerConfig.GlobalBansByDefault;
-    }
-
-    private async Task AddOfflineSteamBanAsync(
-        ICommandContext context,
-        ulong targetSteamId,
-        int duration,
-        string reason,
-        string adminName,
-        ulong adminSteamId,
-        bool isGlobal)
-    {
-        var existingBan = await _banManager.GetActiveBanFreshAsync(targetSteamId, null, _multiServerConfig.Enabled);
-        if (existingBan != null)
-        {
-            Core.Scheduler.NextTick(() => Reply(context, "steamid_already_banned", targetSteamId));
-            return;
-        }
-
-        _banManager.SetAdminContext(adminName, adminSteamId);
-        var ok = await _banManager.AddBanAsync(targetSteamId, targetSteamId.ToString(), duration, reason, isGlobal);
-        if (!ok)
-        {
-            Core.Scheduler.NextTick(() => Reply(context, "addban_failed"));
-            return;
-        }
-
-        Core.Scheduler.NextTick(() =>
-        {
-            var durationDisplay = duration <= 0 ? L("permanent") : L("duration_minutes", duration);
-            Reply(context, "addban_success", targetSteamId, durationDisplay);
-        });
-
-        await AdminLogManager.AddLogAsync("addban", adminName, adminSteamId, targetSteamId, null, $"duration={duration};global={isGlobal};reason={reason}", null, null, reason);
-    }
 }

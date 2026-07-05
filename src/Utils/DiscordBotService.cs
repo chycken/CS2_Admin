@@ -21,30 +21,23 @@ public class DiscordBotService
     private readonly string _reportChannelId;
     private readonly string _adminTimeChannelId;
     private readonly string _serverStatusChannelId;
-    private readonly string _leaderboardChannelId;
     private readonly string _customConnectUrl;
 
     private readonly int _serverStatusUpdateSeconds;
-    private readonly int _leaderboardUpdateMinutes;
-    private readonly int _leaderboardTopLimit;
 
     private readonly string _bannerUrl;
     private readonly ConcurrentDictionary<string, DateTime> _configurationWarningTimestamps = new(StringComparer.Ordinal);
 
     private CancellationTokenSource? _serverStatusPublishCts;
     private CancellationTokenSource? _serverStatusUpdateCts;
-    private CancellationTokenSource? _leaderboardUpdateCts;
-
     private PlayerSessionManager? _playerSessionManager;
     private DiscordServerStatusDbManager? _discordServerStatusDbManager;
-    private RankLeaderboardDbManager? _rankLeaderboardDbManager;
     private DiscordMessageStateDbManager? _discordMessageStateDbManager;
     private WarnManager? _warnManager;
     private AdminLogManager? _adminLogManager;
 
     private readonly DiscordRestClient _restClient;
     private readonly DiscordNotificationService _notificationService;
-    private readonly DiscordLeaderboardService _leaderboardService;
     private readonly DiscordServerStatusService _serverStatusService;
     private readonly DiscordInteractionHandler _interactionHandler;
     private readonly DiscordGatewayClient? _gatewayClient;
@@ -61,12 +54,9 @@ public class DiscordBotService
         _reportChannelId = config.ReportChannelId ?? string.Empty;
         _adminTimeChannelId = config.AdminTimeChannelId ?? string.Empty;
         _serverStatusChannelId = config.ServerStatusChannelId ?? string.Empty;
-        _leaderboardChannelId = config.LeaderboardChannelId ?? string.Empty;
         _customConnectUrl = config.CustomConnectUrl ?? string.Empty;
 
         _serverStatusUpdateSeconds = Math.Max(10, config.ServerStatusUpdateSeconds);
-        _leaderboardUpdateMinutes = Math.Max(1, config.LeaderboardUpdateMinutes);
-        _leaderboardTopLimit = Math.Clamp(config.LeaderboardTopLimit, 1, 25);
         _bannerUrl = config.BannerUrl ?? string.Empty;
 
         _restClient = new DiscordRestClient(_core, _botToken);
@@ -78,8 +68,6 @@ public class DiscordBotService
             _defaultChannelId, _connectionChannelId, _chatChannelId,
             _callAdminChannelId, _reportChannelId, _adminTimeChannelId,
             CommandAliasResolver.BuildSet(commandsConfig));
-        _leaderboardService = new DiscordLeaderboardService(_core, _restClient,
-            _leaderboardChannelId, _leaderboardTopLimit);
         _serverStatusService = new DiscordServerStatusService(_core, _restClient,
             _serverStatusChannelId, _bannerUrl, _customConnectUrl, _serverName);
 
@@ -102,12 +90,10 @@ public class DiscordBotService
     public void StartBackgroundUpdates(
         PlayerSessionManager playerSessionManager,
         DiscordServerStatusDbManager discordServerStatusDbManager,
-        RankLeaderboardDbManager rankLeaderboardDbManager,
         DiscordMessageStateDbManager discordMessageStateDbManager)
     {
         _playerSessionManager = playerSessionManager;
         _discordServerStatusDbManager = discordServerStatusDbManager;
-        _rankLeaderboardDbManager = rankLeaderboardDbManager;
         _discordMessageStateDbManager = discordMessageStateDbManager;
 
         StopBackgroundUpdates();
@@ -118,7 +104,6 @@ public class DiscordBotService
         _ = _serverStatusService.PublishServerStatusAsync();
 
         _serverStatusService.SetDatabaseManagers(discordServerStatusDbManager, discordMessageStateDbManager);
-        _leaderboardService.SetDatabaseManagers(playerSessionManager, rankLeaderboardDbManager, discordMessageStateDbManager);
 
         if (HasBotConfiguration() && !string.IsNullOrWhiteSpace(_serverStatusChannelId))
         {
@@ -126,12 +111,6 @@ public class DiscordBotService
             _ = _serverStatusService.UpsertServerStatusMessageAsync();
         }
 
-        if (HasBotConfiguration() && !string.IsNullOrWhiteSpace(_leaderboardChannelId))
-        {
-            var intervalSeconds = _leaderboardUpdateMinutes * 60f;
-            _leaderboardUpdateCts = _core.Scheduler.RepeatBySeconds(intervalSeconds, () => _ = _leaderboardService.UpsertLeaderboardMessagesAsync());
-            _ = _leaderboardService.UpsertLeaderboardMessagesAsync();
-        }
     }
 
     public void StopBackgroundUpdates()
@@ -143,9 +122,6 @@ public class DiscordBotService
 
         _serverStatusUpdateCts?.Cancel();
         _serverStatusUpdateCts = null;
-
-        _leaderboardUpdateCts?.Cancel();
-        _leaderboardUpdateCts = null;
     }
 
     public void EnsureGatewayConnection()

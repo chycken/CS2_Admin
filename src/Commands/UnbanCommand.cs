@@ -10,22 +10,8 @@ using SwiftlyS2.Shared.Players;
 
 namespace CS2_Admin.Commands;
 
-public class UnbanCommand : CommandBase
+public class UnbanCommand : BanCommandBase
 {
-    private readonly BanManager _banManager;
-    private readonly MuteManager _muteManager;
-    private readonly GagManager _gagManager;
-    private readonly WarnManager _warnManager;
-    private readonly AdminDbManager _adminDbManager;
-    private readonly PlayerIpDbManager _playerIpDbManager;
-    private readonly PlayerSessionManager _playerSessionManager;
-    private readonly RecentPlayersTracker _recentPlayersTracker;
-    private readonly DiscordBotService _discord;
-    private readonly SanctionMenuConfig _sanctions;
-    private readonly MultiServerConfig _multiServerConfig;
-    private readonly int _banType;
-    private readonly PlayerSanctionStateService _sanctionStateService;
-
     public UnbanCommand(
         ISwiftlyCore core,
         BanManager banManager,
@@ -47,21 +33,10 @@ public class UnbanCommand : CommandBase
         int banType,
         PlayerSanctionStateService sanctionStateService,
         PermissionService permissionService)
-        : base(core, permissions, commands, tags, messages, adminLogManager, permissionService)
+        : base(core, banManager, muteManager, gagManager, warnManager, adminDbManager, adminLogManager,
+            playerIpDbManager, playerSessionManager, recentPlayersTracker, discord, permissions, commands,
+            tags, messages, sanctions, multiServerConfig, banType, sanctionStateService, permissionService)
     {
-        _banManager = banManager;
-        _muteManager = muteManager;
-        _gagManager = gagManager;
-        _warnManager = warnManager;
-        _adminDbManager = adminDbManager;
-        _playerIpDbManager = playerIpDbManager;
-        _playerSessionManager = playerSessionManager;
-        _recentPlayersTracker = recentPlayersTracker;
-        _discord = discord;
-        _sanctions = sanctions;
-        _multiServerConfig = multiServerConfig;
-        _banType = banType is >= 1 and <= 3 ? banType : 1;
-        _sanctionStateService = sanctionStateService;
     }
 
     public override async void Execute(ICommandContext context)
@@ -119,20 +94,14 @@ public class UnbanCommand : CommandBase
                 var matches = await _banManager.FindActiveSteamBanTargetsByNameAsync(targetArg, 5);
                 if (matches.Count == 0)
                 {
-                    Core.Scheduler.NextTick(() =>
-                    {
                         ReplyRaw(context, T("unban_name_not_found", "No active banned player matched '{0}'.", targetArg));
-                    });
                     return;
                 }
 
                 if (matches.Count > 1)
                 {
                     var hint = string.Join(", ", matches.Select(m => $"{m.TargetName} ({m.SteamId})"));
-                    Core.Scheduler.NextTick(() =>
-                    {
                         ReplyRaw(context, T("unban_name_ambiguous", "Multiple banned players matched '{0}'. Use SteamID. Matches: {1}", targetArg, hint));
-                    });
                     return;
                 }
 
@@ -150,7 +119,7 @@ public class UnbanCommand : CommandBase
                     affectedRows);
             }
 
-            Core.Scheduler.NextTick(() =>
+            await OnMainThreadAsync(() =>
             {
                 if (!success)
                 {
@@ -191,35 +160,4 @@ public class UnbanCommand : CommandBase
         return (affectedRows, knownIps.Count > 0 ? string.Join(",", knownIps) : null);
     }
 
-    private static bool TryNormalizeIpTarget(string input, out string normalizedIp)
-    {
-        normalizedIp = string.Empty;
-        if (string.IsNullOrWhiteSpace(input))
-        {
-            return false;
-        }
-
-        if (!IPAddress.TryParse(input.Trim(), out var parsed))
-        {
-            return false;
-        }
-
-        normalizedIp = parsed.ToString();
-        return true;
-    }
-
-    private string T(string key, string fallback, params object[] args)
-    {
-        try
-        {
-            var value = args.Length == 0 ? L(key) : L(key, args);
-            return string.Equals(value, key, StringComparison.OrdinalIgnoreCase)
-                ? (args.Length == 0 ? fallback : string.Format(fallback, args))
-                : value;
-        }
-        catch
-        {
-            return args.Length == 0 ? fallback : string.Format(fallback, args);
-        }
-    }
 }

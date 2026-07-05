@@ -22,7 +22,7 @@ public class NotificationService
 
     public void SendToPlayer(IPlayer player, string htmlMessage, string chatMessage)
     {
-        PlayerUtils.SendNotification(player, _messagesConfig, htmlMessage, chatMessage);
+        PlayerUtils.SendNotification(_core, player, _messagesConfig, htmlMessage, chatMessage);
     }
 
     public void BroadcastToAll(string message)

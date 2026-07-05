@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text.RegularExpressions;
 using CS2_Admin.Utils;
 using SwiftlyS2.Shared;
 
@@ -5,102 +7,67 @@ namespace CS2_Admin.Services;
 
 public static class LocalizerHelper
 {
-    // Named placeholder → positional index mapping.
-    // Convention:  {admin}=0  {target}=1  (third-arg names)=2  (fourth-arg names)=3
-    private static readonly (string Name, string Positional)[] NamedPlaceholders =
-    [
-        ("{admin}",           "{0}"),
-        ("{target}",          "{1}"),
-        // third-arg semantic aliases (all map to {2})
-        ("{duration}",        "{2}"),
-        ("{seconds}",         "{2}"),
-        ("{value}",           "{2}"),
-        ("{state}",           "{2}"),
-        ("{damage}",          "{2}"),
-        ("{scale}",           "{2}"),
-        ("{multiplier}",      "{2}"),
-        ("{health}",          "{2}"),
-        ("{amount}",          "{2}"),
-        ("{item}",            "{2}"),
-        ("{map}",             "{2}"),
-        ("{team}",            "{2}"),
-        ("{count}",           "{2}"),
-        ("{name}",            "{2}"),
-        // fourth-arg semantic aliases (all map to {3})
-        ("{reason}",          "{3}"),
-        ("{damage_per_tick}", "{3}"),
-    ];
+    // Pozisyonel placeholder tespiti: {0} {1} ... {9}
+    private static readonly Regex PositionalPattern = new(@"\{\d+\}", RegexOptions.Compiled);
+
+    // İsimli placeholder tespiti: {admin} {target} {damage} {duration} ...
+    // (sadece harf/alt çizgi ile başlayan; {0} gibi sayısal olanları kapsamaz)
+    private static readonly Regex NamedPattern = new(@"\{(?<name>[A-Za-z_][A-Za-z0-9_]*)\}", RegexOptions.Compiled);
 
     /// <summary>
-    /// Replaces named placeholders such as {admin}, {target}, {duration}, {reason}
-    /// with positional ones ({0}, {1}, {2}, {3}) so string.Format works correctly.
-    /// Falls back gracefully if the key already uses positional placeholders.
+    /// Bir çeviri metnini string.Format'a uygun pozisyonel ({0},{1},...) hale getirir.
+    ///
+    /// - Metin zaten pozisyonel placeholder ({0}) içeriyorsa olduğu gibi bırakılır
+    ///   (geriye dönük uyumluluk; tr/en dosyaları bu stili kullanır).
+    /// - Aksi halde isimli placeholder'lar ({admin}, {target}, {damage}, ...) METİNDE
+    ///   İLK GÖRÜNME SIRASINA göre {0}, {1}, {2}, ... ile değiştirilir.
+    ///
+    /// Bu yaklaşım, kod tarafının argümanları cümledeki sırayla göndermesi sayesinde
+    /// hem isimli (hu) hem pozisyonel (tr/en) mesajların güvenle çalışmasını sağlar ve
+    /// "{damage} her zaman {2}" gibi kırılgan sabit eşlemelerin yarattığı hataları önler.
     /// </summary>
-    private static string ApplyNamedPlaceholders(string format)
+    private static string NormalizeToPositional(string format)
     {
-        foreach (var (name, positional) in NamedPlaceholders)
-            format = format.Replace(name, positional);
-        return format;
+        if (string.IsNullOrEmpty(format))
+            return format;
+
+        // Zaten pozisyonel ise dokunma.
+        if (PositionalPattern.IsMatch(format))
+            return format;
+
+        if (!NamedPattern.IsMatch(format))
+            return format;
+
+        var indexByName = new Dictionary<string, int>(StringComparer.Ordinal);
+        return NamedPattern.Replace(format, match =>
+        {
+            var name = match.Groups["name"].Value;
+            if (!indexByName.TryGetValue(name, out var index))
+            {
+                index = indexByName.Count;
+                indexByName[name] = index;
+            }
+            return "{" + index + "}";
+        });
     }
 
     public static string Get(ISwiftlyCore core, string key)
     {
-        var raw = PluginLocalizer.Get(core)[key];
-        return ApplyNamedPlaceholders(raw);
+        // Argümansız çağrı: metni olduğu gibi döndür (placeholder beklenmez).
+        return PluginLocalizer.Get(core)[key];
     }
 
     public static string Get(ISwiftlyCore core, string key, params object[] args)
     {
-        // Get the raw translation string (no formatting), apply named→positional mapping, then format.
         try
         {
             var raw = PluginLocalizer.Get(core)[key];
-            
-            if (args.Length == 1)
-            {
-                var adjusted = raw
-                    .Replace("{count}", "{0}")
-                    .Replace("{duration}", "{0}")
-                    .Replace("{seconds}", "{0}")
-                    .Replace("{name}", "{0}")
-                    .Replace("{value}", "{0}")
-                    .Replace("{amount}", "{0}")
-                    .Replace("{multiplier}", "{0}")
-                    .Replace("{health}", "{0}")
-                    .Replace("{item}", "{0}")
-                    .Replace("{map}", "{0}")
-                    .Replace("{state}", "{0}")
-                    .Replace("{team}", "{0}")
-                    .Replace("{reason}", "{0}");
-                    
-                return string.Format(ApplyNamedPlaceholders(adjusted), args);
-            }
-            
-            if (args.Length == 2)
-            {
-                var adjusted = raw
-                    .Replace("{count}", "{1}")
-                    .Replace("{duration}", "{1}")
-                    .Replace("{seconds}", "{1}")
-                    .Replace("{name}", "{1}")
-                    .Replace("{value}", "{1}")
-                    .Replace("{amount}", "{1}")
-                    .Replace("{multiplier}", "{1}")
-                    .Replace("{health}", "{1}")
-                    .Replace("{item}", "{1}")
-                    .Replace("{map}", "{1}")
-                    .Replace("{state}", "{1}")
-                    .Replace("{team}", "{1}")
-                    .Replace("{reason}", "{1}");
-                    
-                return string.Format(ApplyNamedPlaceholders(adjusted), args);
-            }
-
-            return string.Format(ApplyNamedPlaceholders(raw), args);
+            var format = NormalizeToPositional(raw);
+            return string.Format(CultureInfo.InvariantCulture, format, args);
         }
         catch
         {
-            // Fall back to the default Swiftly formatter if something goes wrong.
+            // Beklenmedik bir biçimlendirme hatasında Swiftly'nin varsayılan formatlayıcısına düş.
             return PluginLocalizer.Get(core)[key, args];
         }
     }
@@ -110,7 +77,6 @@ public static class LocalizerHelper
         try
         {
             var val = PluginLocalizer.Get(core)[key];
-            val = ApplyNamedPlaceholders(val);
             return string.Equals(val, key, StringComparison.OrdinalIgnoreCase) ? fallback : val;
         }
         catch
@@ -124,8 +90,11 @@ public static class LocalizerHelper
         try
         {
             var raw = PluginLocalizer.Get(core)[key];
-            var val = string.Format(ApplyNamedPlaceholders(raw), args);
-            return string.Equals(val, key, StringComparison.OrdinalIgnoreCase) ? string.Format(fallback, args) : val;
+            if (string.Equals(raw, key, StringComparison.OrdinalIgnoreCase))
+                return string.Format(CultureInfo.InvariantCulture, fallback, args);
+
+            var format = NormalizeToPositional(raw);
+            return string.Format(CultureInfo.InvariantCulture, format, args);
         }
         catch
         {

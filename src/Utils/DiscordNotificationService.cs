@@ -259,7 +259,7 @@ public class DiscordNotificationService
 
         try
         {
-            var durationText = duration <= 0 ? PluginLocalizer.Get(_core)["permanent"] : PluginLocalizer.Get(_core)["discord_minutes", duration];
+            var durationText = duration <= 0 ? PluginLocalizer.Get(_core)["permanent"] : global::CS2_Admin.Services.LocalizerHelper.GetWithFallback(_core, "discord_minutes", "{0} minutes", duration);
             var embed = BuildModerationActionEmbed("Ban", 15158332, adminName, "0", targetName, "-", $"Duration: `{durationText}`\nReason: `{reason}`");
 
             await _restClient.SendEmbedAsync(channelId, embed);
@@ -296,7 +296,7 @@ public class DiscordNotificationService
 
         try
         {
-            var durationText = duration <= 0 ? PluginLocalizer.Get(_core)["permanent"] : PluginLocalizer.Get(_core)["discord_minutes", duration];
+            var durationText = duration <= 0 ? PluginLocalizer.Get(_core)["permanent"] : global::CS2_Admin.Services.LocalizerHelper.GetWithFallback(_core, "discord_minutes", "{0} minutes", duration);
             var embed = BuildModerationActionEmbed("Mute", 15105570, adminName, "0", targetName, "-", $"Duration: `{durationText}`\nReason: `{reason}`");
 
             await _restClient.SendEmbedAsync(channelId, embed);
@@ -315,7 +315,7 @@ public class DiscordNotificationService
 
         try
         {
-            var durationText = duration <= 0 ? PluginLocalizer.Get(_core)["permanent"] : PluginLocalizer.Get(_core)["discord_minutes", duration];
+            var durationText = duration <= 0 ? PluginLocalizer.Get(_core)["permanent"] : global::CS2_Admin.Services.LocalizerHelper.GetWithFallback(_core, "discord_minutes", "{0} minutes", duration);
             var embed = BuildModerationActionEmbed("Gag", 15105570, adminName, "0", targetName, "-", $"Duration: `{durationText}`\nReason: `{reason}`");
 
             await _restClient.SendEmbedAsync(channelId, embed);
@@ -352,7 +352,7 @@ public class DiscordNotificationService
 
         try
         {
-            var durationText = duration <= 0 ? PluginLocalizer.Get(_core)["permanent"] : PluginLocalizer.Get(_core)["discord_minutes", duration];
+            var durationText = duration <= 0 ? PluginLocalizer.Get(_core)["permanent"] : global::CS2_Admin.Services.LocalizerHelper.GetWithFallback(_core, "discord_minutes", "{0} minutes", duration);
             var embed = BuildModerationActionEmbed("Silence", 10181046, adminName, "0", targetName, "-", $"Duration: `{durationText}`\nReason: `{reason}`");
 
             await _restClient.SendEmbedAsync(channelId, embed);
@@ -371,7 +371,7 @@ public class DiscordNotificationService
 
         try
         {
-            var durationText = duration <= 0 ? PluginLocalizer.Get(_core)["permanent"] : PluginLocalizer.Get(_core)["discord_minutes", duration];
+            var durationText = duration <= 0 ? PluginLocalizer.Get(_core)["permanent"] : global::CS2_Admin.Services.LocalizerHelper.GetWithFallback(_core, "discord_minutes", "{0} minutes", duration);
             var embed = BuildModerationActionEmbed("Warn", 16098851, adminName, "0", targetName, "-", $"Duration: `{durationText}`\nReason: `{reason}`");
 
             await _restClient.SendEmbedAsync(channelId, embed);
@@ -569,18 +569,12 @@ public class DiscordNotificationService
 
     private string T(string key, string fallback, params object[] args)
     {
-        try
-        {
-            var localizer = PluginLocalizer.Get(_core);
-            var value = args.Length == 0 ? localizer[key] : localizer[key, args];
-            return string.Equals(value, key, StringComparison.OrdinalIgnoreCase)
-                ? (args.Length == 0 ? fallback : string.Format(System.Globalization.CultureInfo.InvariantCulture, fallback, args))
-                : value;
-        }
-        catch
-        {
-            return args.Length == 0 ? fallback : string.Format(System.Globalization.CultureInfo.InvariantCulture, fallback, args);
-        }
+        // İsimli placeholder'lı ({player}, {reason}, {minutes}...) çeviri anahtarları chat ile AYNI
+        // şekilde çalışsın diye LocalizerHelper üzerinden normalize edip biçimlendiriyoruz. Native
+        // localizer[key, args] yalnızca pozisyonel {0} destekler ve isimli placeholder'ları bozardı.
+        return args.Length == 0
+            ? global::CS2_Admin.Services.LocalizerHelper.GetWithFallback(_core, key, fallback)
+            : global::CS2_Admin.Services.LocalizerHelper.GetWithFallback(_core, key, fallback, args);
     }
 
     private static string BuildAdminPlaytimeColumn(IReadOnlyList<AdminPlaytime> entries, int startRank)
@@ -725,12 +719,7 @@ public class DiscordNotificationService
             return preferredChannelId;
         }
 
-        if (!string.IsNullOrWhiteSpace(_defaultChannelId))
-        {
-            return _defaultChannelId;
-        }
-
-        return _reportChannelId;
+        return string.Empty;
     }
 
     private string BuildSteamServerUrl()

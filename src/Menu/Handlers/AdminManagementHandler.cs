@@ -4,6 +4,7 @@ using SwiftlyS2.Shared.Players;
 using SwiftlyS2.Core.Menus.OptionsBase;
 using CS2_Admin.Config;
 using CS2_Admin.Database;
+using CS2_Admin.Models;
 using CS2_Admin.Utils;
 
 namespace CS2_Admin.Menu.Handlers;
@@ -47,11 +48,43 @@ public class AdminManagementHandler : IAdminMenuHandler
         var addAdminText = T("menu_add_admin");
         builder.AddOption(new SubmenuMenuOption(addAdminText, () => BuildAddAdminMenu(player)));
 
+        // Admin listesi DB'den gelir; menü factory'sinde senkron bloklamak main thread'i
+        // dondurur. Bu yüzden veriyi arka planda çekip menüyü NextTick'te açıyoruz.
         var removeAdminText = T("menu_remove_admin");
-        builder.AddOption(new SubmenuMenuOption(removeAdminText, () => BuildRemoveAdminMenu(player)));
+        var removeAdminBtn = new ButtonMenuOption(removeAdminText) { CloseAfterClick = false };
+        removeAdminBtn.Click += (_, args) =>
+        {
+            var adminPlayer = args.Player;
+            _ = Task.Run(async () =>
+            {
+                var admins = await _adminManager.GetAllAdminsAsync();
+                _core.Scheduler.NextTick(() =>
+                {
+                    if (adminPlayer.IsValid)
+                        _core.MenusAPI.OpenMenuForPlayer(adminPlayer, BuildRemoveAdminMenu(adminPlayer, admins));
+                });
+            });
+            return ValueTask.CompletedTask;
+        };
+        builder.AddOption(removeAdminBtn);
 
         var listAdminsText = T("menu_list_admins");
-        builder.AddOption(new SubmenuMenuOption(listAdminsText, () => BuildListAdminsMenu(player)));
+        var listAdminsBtn = new ButtonMenuOption(listAdminsText) { CloseAfterClick = false };
+        listAdminsBtn.Click += (_, args) =>
+        {
+            var adminPlayer = args.Player;
+            _ = Task.Run(async () =>
+            {
+                var admins = await _adminManager.GetAllAdminsAsync();
+                _core.Scheduler.NextTick(() =>
+                {
+                    if (adminPlayer.IsValid)
+                        _core.MenusAPI.OpenMenuForPlayer(adminPlayer, BuildListAdminsMenu(adminPlayer, admins));
+                });
+            });
+            return ValueTask.CompletedTask;
+        };
+        builder.AddOption(listAdminsBtn);
 
         return builder.Build();
     }
@@ -83,40 +116,49 @@ public class AdminManagementHandler : IAdminMenuHandler
 
     private void OpenAddAdminGroupMenu(IPlayer admin, IPlayer target)
     {
-        var builder = _core.MenusAPI.CreateBuilder();
-        builder.BindToParent(BuildAddAdminMenu(admin));
-        builder.Design.SetMenuTitle(T("menu_select_group"));
-
-        var groups = Task.Run(async () => await _groupManager.GetAllGroupsAsync()).GetAwaiter().GetResult();
-        foreach (var group in groups)
+        // Grup listesini main thread'i bloklamadan çek, menüyü main thread'de aç.
+        _ = Task.Run(async () =>
         {
-            var groupBtn = new ButtonMenuOption(T("menu_group_with_immunity", group.Name, group.Immunity)) { CloseAfterClick = true };
-            groupBtn.Click += (_, args) =>
+            var groups = await _groupManager.GetAllGroupsAsync();
+            _core.Scheduler.NextTick(() =>
             {
-                var adminPlayer = args.Player;
-                _core.Scheduler.NextTick(() => ExecuteAddAdminWithGroup(adminPlayer, target, group.Name));
-                return ValueTask.CompletedTask;
-            };
-            builder.AddOption(groupBtn);
-        }
+                if (!admin.IsValid)
+                    return;
 
-        if (groups.Count == 0)
-        {
-            var empty = new ButtonMenuOption(T("menu_no_groups")) { CloseAfterClick = true };
-            empty.Click += (_, _) => ValueTask.CompletedTask;
-            builder.AddOption(empty);
-        }
+                var builder = _core.MenusAPI.CreateBuilder();
+                builder.BindToParent(BuildAddAdminMenu(admin));
+                builder.Design.SetMenuTitle(T("menu_select_group"));
 
-        _core.MenusAPI.OpenMenuForPlayer(admin, builder.Build());
+                foreach (var group in groups)
+                {
+                    var groupBtn = new ButtonMenuOption(T("menu_group_with_immunity", group.Name, group.Immunity)) { CloseAfterClick = true };
+                    groupBtn.Click += (_, args) =>
+                    {
+                        var adminPlayer = args.Player;
+                        _core.Scheduler.NextTick(() => ExecuteAddAdminWithGroup(adminPlayer, target, group.Name));
+                        return ValueTask.CompletedTask;
+                    };
+                    builder.AddOption(groupBtn);
+                }
+
+                if (groups.Count == 0)
+                {
+                    var empty = new ButtonMenuOption(T("menu_no_groups")) { CloseAfterClick = true };
+                    empty.Click += (_, _) => ValueTask.CompletedTask;
+                    builder.AddOption(empty);
+                }
+
+                _core.MenusAPI.OpenMenuForPlayer(admin, builder.Build());
+            });
+        });
     }
 
-    private IMenuAPI BuildRemoveAdminMenu(IPlayer admin)
+    private IMenuAPI BuildRemoveAdminMenu(IPlayer admin, List<Admin> admins)
     {
         var builder = _core.MenusAPI.CreateBuilder();
         var title = T("menu_select_admin_remove");
         builder.Design.SetMenuTitle(title);
 
-        var admins = Task.Run(async () => await _adminManager.GetAllAdminsAsync()).GetAwaiter().GetResult();
         if (admins.Count == 0)
         {
             var empty = new ButtonMenuOption(T("menu_no_admins")) { CloseAfterClick = true };
@@ -223,12 +265,11 @@ public class AdminManagementHandler : IAdminMenuHandler
         _core.Scheduler.NextTick(() => admin.ExecuteCommand(cmd));
     }
 
-    private IMenuAPI BuildListAdminsMenu(IPlayer admin)
+    private IMenuAPI BuildListAdminsMenu(IPlayer admin, List<Admin> admins)
     {
         var builder = _core.MenusAPI.CreateBuilder();
         builder.Design.SetMenuTitle(T("menu_list_admins"));
 
-        var admins = Task.Run(async () => await _adminManager.GetAllAdminsAsync()).GetAwaiter().GetResult();
         if (admins.Count == 0)
         {
             var empty = new ButtonMenuOption(T("menu_no_admins")) { CloseAfterClick = true };

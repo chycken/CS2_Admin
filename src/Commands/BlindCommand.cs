@@ -31,56 +31,37 @@ public class BlindCommand : CommandBase
         _adminDbManager = adminDbManager;
     }
 
-    public override async void Execute(ICommandContext context)
+
+
+    public override void Execute(ICommandContext context)
     {
-        try
-        {
-            var args = NormalizeArgs(context.Args, CommandsConfig.Blind);
-
-            if (!HasPerm(context, Permissions.Blind))
+        RunTargetedFunCommand(context, CommandsConfig.Blind, Permissions.Blind, "blind_usage", _adminDbManager, "Blind",
+            includeDeadPlayers: false,
+            minArgs: 2,
+            targetFilter: p => p.PlayerPawn?.IsValid == true && p.PlayerPawn.Health > 0,
+            onMainThread: (ctx, args, targets, adminName) =>
             {
-                Reply(context, "no_permission");
-                return;
-            }
-
-            if (args.Length < 2 || !int.TryParse(args[1], out var parsedDuration))
-            {
-                Reply(context, "blind_usage");
-                return;
-            }
-
-            var durationSeconds = Math.Clamp(parsedDuration, 1, 60);
-
-            var targets = PlayerUtils.FindPlayersByTarget(Core, args[0], includeDeadPlayers: false, caller: context.Sender)
-                .Where(p => p.PlayerPawn?.IsValid == true && p.PlayerPawn.Health > 0)
-                .ToList();
-            if (targets.Count == 0)
-            {
-                Reply(context, "no_valid_targets");
-                return;
-            }
-
-            targets = await PlayerUtils.FilterTargetsByAccessAsync(Core, _adminDbManager, context, targets, allowSelf: true);
-            if (targets.Count == 0)
-            {
-                Reply(context, "no_valid_targets");
-                return;
-            }
-
-            foreach (var target in targets)
-            {
-                var targetSteamId = target.SteamID;
-                Core.Scheduler.NextTick(() =>
+                if (!int.TryParse(args[1], out var parsedDuration))
                 {
+                    Reply(ctx, "blind_usage");
+                    return;
+                }
+
+                var durationSeconds = Math.Clamp(parsedDuration, 1, 60);
+
+                foreach (var target in targets)
+                {
+                    var targetSteamId = target.SteamID;
+
                     var liveTarget = Core.PlayerManager.GetAllPlayers().FirstOrDefault(p => p.IsValid && p.SteamID == targetSteamId);
                     if (liveTarget?.IsValid != true)
-                        return;
+                        continue;
 
                     ApplyBlindEffect(liveTarget, durationSeconds);
 
-                    PlayerUtils.SendNotification(liveTarget, Messages,
+                    PlayerUtils.SendNotification(Core, liveTarget, Messages,
                         $"<font color='#2c3e50'><b>{L("blind_personal_html")}</b></font><br><br>{L("label_duration")}: <font color='#e74c3c'>{durationSeconds}s</font>",
-                        $" \x02{L("prefix")}\x01 {L("blind_personal_chat", ResolveVisibleAdminName(liveTarget, context.Sender?.Controller.PlayerName ?? L("console_name")), durationSeconds)}");
+                        $" \x02{L("prefix")}\x01 {L("blind_personal_chat", ResolveVisibleAdminName(liveTarget, ctx.Sender?.Controller.PlayerName ?? L("console_name")), durationSeconds)}");
 
                     Core.Scheduler.DelayBySeconds(durationSeconds, () =>
                     {
@@ -88,19 +69,13 @@ public class BlindCommand : CommandBase
                         if (sameTarget?.IsValid == true)
                             ClearBlindEffect(sameTarget);
                     });
-                });
-            }
+                }
 
-            var adminName = context.Sender?.Controller.PlayerName ?? L("console_name");
-            BroadcastNotification(adminName, "blind_notification", FormatTargetName(targets), durationSeconds);
+                BroadcastNotification(adminName, "blind_notification", FormatTargetName(targets), durationSeconds);
 
-            _ = AdminLogManager.AddLogAsync("blind", adminName, context.Sender?.SteamID ?? 0, null, null, $"targets={targets.Count};duration={durationSeconds}");
-            Core.Logger.LogInformationIfEnabled("[CS2_Admin] {Admin} blinded {Count} player(s) for {Duration}s", adminName, targets.Count, durationSeconds);
-        }
-        catch (Exception ex)
-        {
-            Core.Logger.LogErrorIfEnabled(ex, "[CS2_Admin] Blind command failed");
-        }
+                _ = AdminLogManager.AddLogAsync("blind", adminName, ctx.Sender?.SteamID ?? 0, null, null, $"targets={targets.Count};duration={durationSeconds}");
+                Core.Logger.LogInformationIfEnabled("[CS2_Admin] {Admin} blinded {Count} player(s) for {Duration}s", adminName, targets.Count, durationSeconds);
+            });
     }
 
     private void ApplyBlindEffect(IPlayer target, float holdSeconds)

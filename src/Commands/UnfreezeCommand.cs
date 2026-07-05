@@ -13,10 +13,6 @@ namespace CS2_Admin.Commands;
 public class UnfreezeCommand : CommandBase
 {
     private readonly AdminDbManager _adminDbManager;
-    private readonly HashSet<int> _frozenPlayers = new();
-    private readonly HashSet<int> _freezeVisualPlayers = new();
-    private readonly Dictionary<int, float> _freezeOriginalViewmodelFov = new();
-    private readonly Dictionary<int, (float X, float Y, float Z)> _freezeOriginalViewmodelOffsets = new();
 
     public UnfreezeCommand(
         ISwiftlyCore core,
@@ -31,66 +27,37 @@ public class UnfreezeCommand : CommandBase
         _adminDbManager = adminDbManager;
     }
 
-    public override async void Execute(ICommandContext context)
+    public override void Execute(ICommandContext context)
     {
-        try
-        {
-            var args = NormalizeArgs(context.Args, CommandsConfig.Unfreeze);
-
-            if (!HasPerm(context, Permissions.Unfreeze))
+        RunTargetedFunCommand(context, CommandsConfig.Unfreeze, Permissions.Unfreeze, "unfreeze_usage", _adminDbManager, "Unfreeze",
+            onMainThread: (ctx, args, targets, adminName) =>
             {
-                Reply(context, "no_permission");
-                return;
-            }
+                foreach (var target in targets)
+                {
+                    PlayerUtils.Unfreeze(target);
+                    var playerId = target.PlayerID;
+                    FreezeSharedState.FrozenPlayers.Remove(playerId);
+                    FreezeSharedState.VisualPlayers.Remove(playerId);
+                    RestoreFreezeVisuals(playerId);
+                }
 
-            if (args.Length < 1)
-            {
-                Reply(context, "unfreeze_usage");
-                return;
-            }
+                foreach (var target in targets)
+                {
+                    PlayerUtils.SendNotification(Core, target, Messages,
+                        $"<font color='#00ff00'><b>{L("unfrozen_personal_html")}</b></font><br><br>{L("label_by")}: <font color='#ffcc00'>{ResolveVisibleAdminName(target, adminName)}</font>",
+                        $" \x02{L("prefix")}\x01 {L("unfrozen_personal_chat", ResolveVisibleAdminName(target, adminName))}");
+                }
 
-            var targets = PlayerUtils.FindPlayersByTarget(Core, args[0], caller: context.Sender);
-            if (targets.Count == 0)
-            {
-                Reply(context, "no_valid_targets");
-                return;
-            }
-
-            var adminName = context.Sender?.Controller.PlayerName ?? L("console_name");
-
-            foreach (var target in targets)
-            {
-                PlayerUtils.Unfreeze(target);
-                var playerId = target.PlayerID;
-                _frozenPlayers.Remove(playerId);
-                _freezeVisualPlayers.Remove(playerId);
-                RestoreFreezeVisuals(playerId);
-            }
-
-            foreach (var target in targets)
-            {
-                PlayerUtils.SendNotification(target, Messages,
-                    $"<font color='#00ff00'><b>{L("unfrozen_personal_html")}</b></font><br><br>{L("label_by")}: <font color='#ffcc00'>{ResolveVisibleAdminName(target, adminName)}</font>",
-                    $" \x02{L("prefix")}\x01 {L("unfrozen_personal_chat", ResolveVisibleAdminName(target, adminName))}");
-            }
-
-            if (targets.Count > 0)
-            {
                 BroadcastNotification(adminName, "unfreeze_notification", FormatTargetName(targets));
-            }
 
-            var unfreezeTargetSteamIds = string.Join(",", targets.Select(t => t.SteamID));
-            _ = AdminLogManager.AddLogAsync("unfreeze", adminName, context.Sender?.SteamID ?? 0, null, null, $"targets={unfreezeTargetSteamIds};count={targets.Count}");
-        }
-        catch (Exception ex)
-        {
-            Core.Logger.LogErrorIfEnabled(ex, "[CS2_Admin] Unfreeze command failed");
-        }
+                var unfreezeTargetSteamIds = string.Join(",", targets.Select(t => t.SteamID));
+                _ = AdminLogManager.AddLogAsync("unfreeze", adminName, ctx.Sender?.SteamID ?? 0, null, null, $"targets={unfreezeTargetSteamIds};count={targets.Count}");
+            });
     }
 
     private void RestoreFreezeVisuals(int playerId)
     {
-        if (_freezeOriginalViewmodelFov.TryGetValue(playerId, out var originalFov))
+        if (FreezeSharedState.OriginalViewmodelFov.TryGetValue(playerId, out var originalFov))
         {
             var player = Core.PlayerManager.GetAllPlayers().FirstOrDefault(p => p.IsValid && p.PlayerID == playerId);
             if (player?.PlayerPawn?.IsValid == true)
@@ -99,10 +66,10 @@ public class UnfreezeCommand : CommandBase
                 player.PlayerPawn.ViewmodelFOVUpdated();
             }
 
-            _freezeOriginalViewmodelFov.Remove(playerId);
+            FreezeSharedState.OriginalViewmodelFov.Remove(playerId);
         }
 
-        if (_freezeOriginalViewmodelOffsets.TryGetValue(playerId, out var originalOffsets))
+        if (FreezeSharedState.OriginalViewmodelOffsets.TryGetValue(playerId, out var originalOffsets))
         {
             var player = Core.PlayerManager.GetAllPlayers().FirstOrDefault(p => p.IsValid && p.PlayerID == playerId);
             if (player?.PlayerPawn?.IsValid == true)
@@ -112,7 +79,7 @@ public class UnfreezeCommand : CommandBase
                 player.PlayerPawn.ViewmodelOffsetZ = originalOffsets.Z;
             }
 
-            _freezeOriginalViewmodelOffsets.Remove(playerId);
+            FreezeSharedState.OriginalViewmodelOffsets.Remove(playerId);
         }
     }
 }

@@ -13,10 +13,6 @@ namespace CS2_Admin.Commands;
 public class FreezeCommand : CommandBase
 {
     private readonly AdminDbManager _adminDbManager;
-    private readonly HashSet<int> _frozenPlayers = new();
-    private readonly HashSet<int> _freezeVisualPlayers = new();
-    private readonly Dictionary<int, float> _freezeOriginalViewmodelFov = new();
-    private readonly Dictionary<int, (float X, float Y, float Z)> _freezeOriginalViewmodelOffsets = new();
 
     public FreezeCommand(
         ISwiftlyCore core,
@@ -31,102 +27,63 @@ public class FreezeCommand : CommandBase
         _adminDbManager = adminDbManager;
     }
 
-    public override async void Execute(ICommandContext context)
+
+
+    public override void Execute(ICommandContext context)
     {
-        try
-        {
-            var args = NormalizeArgs(context.Args, CommandsConfig.Freeze);
-
-            if (!HasPerm(context, Permissions.Freeze))
+        RunTargetedFunCommand(context, CommandsConfig.Freeze, Permissions.Freeze, "freeze_usage", _adminDbManager, "Freeze",
+            includeDeadPlayers: false,
+            onMainThread: (ctx, args, targets, adminName) =>
             {
-                Reply(context, "no_permission");
-                return;
-            }
-
-            if (args.Length < 1)
-            {
-                Reply(context, "freeze_usage");
-                return;
-            }
-
-            var targets = PlayerUtils.FindPlayersByTarget(Core, args[0], includeDeadPlayers: false, caller: context.Sender);
-            if (targets.Count == 0)
-            {
-                Reply(context, "no_valid_targets");
-                return;
-            }
-
-            var adminName = context.Sender?.Controller.PlayerName ?? L("console_name");
-
-            int? durationSeconds = null;
-            if (args.Length >= 2 && int.TryParse(args[1], out var parsedSeconds) && parsedSeconds > 0)
-            {
-                durationSeconds = parsedSeconds;
-            }
-
-            foreach (var target in targets)
-            {
-                var targetSteamId = target.SteamID;
-                Core.Scheduler.NextTick(() =>
+                int? durationSeconds = null;
+                if (args.Length >= 2 && int.TryParse(args[1], out var parsedSeconds) && parsedSeconds > 0)
                 {
-                    var liveTarget = Core.PlayerManager.GetAllPlayers().FirstOrDefault(p => p.IsValid && p.SteamID == targetSteamId);
-                    if (liveTarget?.IsValid != true)
-                    {
-                        return;
-                    }
+                    durationSeconds = parsedSeconds;
+                }
 
-                    var playerId = liveTarget.PlayerID;
-                    PlayerUtils.Freeze(liveTarget);
-                    _frozenPlayers.Add(playerId);
+                foreach (var target in targets)
+                {
+                    var playerId = target.PlayerID;
+                    PlayerUtils.Freeze(target);
+                    FreezeSharedState.FrozenPlayers.Add(playerId);
 
-                    if (_freezeVisualPlayers.Add(playerId))
+                    if (FreezeSharedState.VisualPlayers.Add(playerId))
                     {
-                        StartFreezeVisualPulse(liveTarget.SteamID);
+                        StartFreezeVisualPulse(target.SteamID);
                     }
 
                     if (durationSeconds.HasValue)
                     {
                         Core.Scheduler.DelayBySeconds(durationSeconds.Value, () =>
                         {
-                            Core.Scheduler.NextTick(() =>
+                            var player = Core.PlayerManager.GetAllPlayers().FirstOrDefault(p => p.IsValid && p.PlayerID == playerId);
+                            if (player == null)
                             {
-                                var player = Core.PlayerManager.GetAllPlayers().FirstOrDefault(p => p.IsValid && p.PlayerID == playerId);
-                                if (player == null)
-                                {
-                                    return;
-                                }
+                                return;
+                            }
 
-                                if (_frozenPlayers.Contains(playerId))
-                                {
-                                    PlayerUtils.Unfreeze(player);
-                                    _frozenPlayers.Remove(playerId);
-                                    _freezeVisualPlayers.Remove(playerId);
-                                }
-                            });
+                            if (FreezeSharedState.FrozenPlayers.Contains(playerId))
+                            {
+                                PlayerUtils.Unfreeze(player);
+                                FreezeSharedState.FrozenPlayers.Remove(playerId);
+                                FreezeSharedState.VisualPlayers.Remove(playerId);
+                            }
                         });
                     }
-                });
-            }
+                }
 
-            foreach (var target in targets)
-            {
-                PlayerUtils.SendNotification(target, Messages,
-                    $"<font color='#00ccff'><b>{L("frozen_personal_html")}</b></font><br><br>{L("label_by")}: <font color='#ffcc00'>{ResolveVisibleAdminName(target, adminName)}</font>",
-                    $" \x02{L("prefix")}\x01 {L("frozen_personal_chat", ResolveVisibleAdminName(target, adminName))}");
-            }
+                foreach (var target in targets)
+                {
+                    PlayerUtils.SendNotification(Core, target, Messages,
+                        $"<font color='#00ccff'><b>{L("frozen_personal_html")}</b></font><br><br>{L("label_by")}: <font color='#ffcc00'>{ResolveVisibleAdminName(target, adminName)}</font>",
+                        $" \x02{L("prefix")}\x01 {L("frozen_personal_chat", ResolveVisibleAdminName(target, adminName))}");
+                }
 
-            if (targets.Count > 0)
-            {
                 BroadcastNotification(adminName, "freeze_notification", FormatTargetName(targets));
-            }
 
-            var freezeTargetSteamIds = string.Join(",", targets.Select(t => t.SteamID));
-            _ = AdminLogManager.AddLogAsync("freeze", adminName, context.Sender?.SteamID ?? 0, null, null, $"targets={freezeTargetSteamIds};count={targets.Count};duration={durationSeconds?.ToString() ?? "0"}");
-        }
-        catch (Exception ex)
-        {
-            Core.Logger.LogErrorIfEnabled(ex, "[CS2_Admin] Freeze command failed");
-        }
+                var freezeTargetSteamIds = string.Join(",", targets.Select(t => t.SteamID));
+                _ = AdminLogManager.AddLogAsync("freeze", adminName, ctx.Sender?.SteamID ?? 0, null, null, $"targets={freezeTargetSteamIds};count={targets.Count};duration={durationSeconds?.ToString() ?? "0"}");
+            });
     }
 
     private void StartFreezeVisualPulse(ulong steamId)
@@ -140,9 +97,9 @@ public class FreezeCommand : CommandBase
             }
 
             var playerId = player.PlayerID;
-            if (!_frozenPlayers.Contains(playerId))
+            if (!FreezeSharedState.FrozenPlayers.Contains(playerId))
             {
-                _freezeVisualPlayers.Remove(playerId);
+                FreezeSharedState.VisualPlayers.Remove(playerId);
                 return;
             }
 
@@ -152,14 +109,14 @@ public class FreezeCommand : CommandBase
                 return;
             }
 
-            if (!_freezeOriginalViewmodelFov.ContainsKey(playerId))
+            if (!FreezeSharedState.OriginalViewmodelFov.ContainsKey(playerId))
             {
-                _freezeOriginalViewmodelFov[playerId] = pawn.ViewmodelFOV > 0 ? pawn.ViewmodelFOV : 68f;
+                FreezeSharedState.OriginalViewmodelFov[playerId] = pawn.ViewmodelFOV > 0 ? pawn.ViewmodelFOV : 68f;
             }
 
-            if (!_freezeOriginalViewmodelOffsets.ContainsKey(playerId))
+            if (!FreezeSharedState.OriginalViewmodelOffsets.ContainsKey(playerId))
             {
-                _freezeOriginalViewmodelOffsets[playerId] = (pawn.ViewmodelOffsetX, pawn.ViewmodelOffsetY, pawn.ViewmodelOffsetZ);
+                FreezeSharedState.OriginalViewmodelOffsets[playerId] = (pawn.ViewmodelOffsetX, pawn.ViewmodelOffsetY, pawn.ViewmodelOffsetZ);
             }
 
             pawn.ViewmodelFOV = 40f;

@@ -46,8 +46,12 @@ public class WsMapCommand : CommandBase
         }
     }
 
+
+
     public override async void Execute(ICommandContext context)
     {
+
+
         try
         {
             var args = NormalizeArgs(context.Args, CommandsConfig.ChangeWSMap);
@@ -86,20 +90,24 @@ public class WsMapCommand : CommandBase
             }
             else
             {
-                mapDisplayName = ResolveWorkshopDisplayName(workshopId);
+                // HTTP tabanlı isim çözümü main thread'i bloklamasın diye async yapılır.
+                mapDisplayName = await ResolveWorkshopDisplayNameAsync(workshopId);
             }
 
             var adminName = context.Sender?.Controller.PlayerName ?? L("console_name");
             const float changeDelaySeconds = 3f;
 
-            BroadcastNotification(adminName, "wsmap_changing", mapDisplayName, changeDelaySeconds);
-
-            Core.Scheduler.DelayBySeconds(changeDelaySeconds, () =>
+            await OnMainThreadAsync(() =>
             {
-                Core.Engine.ExecuteCommand($"ds_workshop_changelevel {workshopId}");
-                Core.Scheduler.DelayBySeconds(0.25f, () =>
+                BroadcastNotification(adminName, "wsmap_changing", mapDisplayName, changeDelaySeconds);
+
+                Core.Scheduler.DelayBySeconds(changeDelaySeconds, () =>
                 {
-                    Core.Engine.ExecuteCommand($"host_workshop_map {workshopId}");
+                    Core.Engine.ExecuteCommand($"ds_workshop_changelevel {workshopId}");
+                    Core.Scheduler.DelayBySeconds(0.25f, () =>
+                    {
+                        Core.Engine.ExecuteCommand($"host_workshop_map {workshopId}");
+                    });
                 });
             });
 
@@ -112,7 +120,7 @@ public class WsMapCommand : CommandBase
         }
     }
 
-    private string ResolveWorkshopDisplayName(uint workshopId)
+    private async Task<string> ResolveWorkshopDisplayNameAsync(uint workshopId)
     {
         var knownMap = _workshopMaps.Maps.FirstOrDefault(m => m.Value == workshopId);
         if (!string.IsNullOrWhiteSpace(knownMap.Key))
@@ -126,7 +134,7 @@ public class WsMapCommand : CommandBase
             return cached;
         }
 
-        var fetched = TryFetchWorkshopTitle(workshopId);
+        var fetched = await TryFetchWorkshopTitleAsync(workshopId);
         if (!string.IsNullOrWhiteSpace(fetched))
         {
             WorkshopNameCache[workshopId] = fetched;
@@ -136,7 +144,7 @@ public class WsMapCommand : CommandBase
         return workshopId.ToString();
     }
 
-    private string? TryFetchWorkshopTitle(uint workshopId)
+    private async Task<string?> TryFetchWorkshopTitleAsync(uint workshopId)
     {
         try
         {
@@ -145,13 +153,13 @@ public class WsMapCommand : CommandBase
                 ["itemcount"] = "1",
                 ["publishedfileids[0]"] = workshopId.ToString()
             });
-            using var response = Task.Run(async () => await WorkshopApiClient.PostAsync(WorkshopDetailsApiUrl, form)).GetAwaiter().GetResult();
+            using var response = await WorkshopApiClient.PostAsync(WorkshopDetailsApiUrl, form);
             if (!response.IsSuccessStatusCode)
             {
                 return null;
             }
 
-            var json = Task.Run(async () => await response.Content.ReadAsStringAsync()).GetAwaiter().GetResult();
+            var json = await response.Content.ReadAsStringAsync();
             using var doc = JsonDocument.Parse(json);
             if (!doc.RootElement.TryGetProperty("response", out var responseNode))
             {

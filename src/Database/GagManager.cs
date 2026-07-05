@@ -95,32 +95,37 @@ public class GagManager
                 var admin = _currentAdmin.Value ?? new AdminContext();
                 using var connection = _core.Database.GetConnection("mysql_detailed");
 
-                var gag = connection.QueryFirstOrDefault<Gag>(
-                    $@"SELECT * FROM `admin_gags` WHERE `steamid` = @SteamId AND {PunishmentQueryCompat.ActiveStatusWhere} ORDER BY `created_at` DESC LIMIT 1",
-                    new { SteamId = steamId }
-                );
+                // TÜM aktif gag satırlarını tek seferde pasifleştir (Ban ile aynı davranış).
+                // Eski kod yalnızca LIMIT 1 ile tek satır güncelliyordu; mükerrer aktif satır
+                // varsa biri aktif kalıp "zaten gaglı" hatasının kalıcı olmasına yol açıyordu.
+                var affected = connection.Execute(
+                    $@"UPDATE `admin_gags`
+                       SET `status` = @Status,
+                           `ungag_admin_name` = @UngagAdminName,
+                           `ungag_admin_steamid` = @UngagAdminSteamId,
+                           `ungag_reason` = @UngagReason,
+                           `ungag_date` = @UngagDate
+                       WHERE `steamid` = @SteamId
+                         AND {PunishmentQueryCompat.ActiveStatusWhere}",
+                    new
+                    {
+                        SteamId = steamId,
+                        Status = GagStatusNames.Ungagged,
+                        UngagAdminName = admin.Name,
+                        UngagAdminSteamId = admin.SteamId,
+                        UngagReason = ungagReason,
+                        UngagDate = DateTime.UtcNow
+                    });
 
-                if (gag == null)
-                {
-                    return false;
-                }
-
-                gag.Status = GagStatus.Ungagged;
-                gag.UngagAdminName = admin.Name;
-                gag.UngagAdminSteamId = admin.SteamId;
-                gag.UngagReason = ungagReason;
-                gag.UngagDate = DateTime.UtcNow;
-
-                connection.Update(gag);
                 _gagCache.TryRemove(steamId, out _);
                 _core.Logger.LogInformationIfEnabled(
-                    "[CS2_Admin][Trace][Gag] ungag steamid={SteamId} gagId={GagId} admin={Admin} reason={Reason}",
+                    "[CS2_Admin][Trace][Gag] ungag steamid={SteamId} affected={Affected} admin={Admin} reason={Reason}",
                     steamId,
-                    gag.Id,
-                    gag.UngagAdminName ?? "-",
-                    gag.UngagReason ?? "-");
+                    affected,
+                    admin.Name,
+                    ungagReason);
 
-                return true;
+                return affected > 0;
             }
             catch (Exception ex)
             {
@@ -287,12 +292,12 @@ public class GagManager
                 using var connection = _core.Database.GetConnection("mysql_detailed");
                 
                 var cleaned = connection.Execute(
-                    $@"UPDATE `admin_gags` 
-                      SET `status` = '3' 
-                      WHERE {PunishmentQueryCompat.ActiveStatusWhere} 
-                        AND `expires_at` IS NOT NULL 
+                    $@"UPDATE `admin_gags`
+                      SET `status` = @Status
+                      WHERE {PunishmentQueryCompat.ActiveStatusWhere}
+                        AND `expires_at` IS NOT NULL
                         AND `expires_at` <= @Now",
-                    new { Now = DateTime.UtcNow }
+                    new { Now = DateTime.UtcNow, Status = GagStatusNames.Expired }
                 );
 
                 if (cleaned > 0)

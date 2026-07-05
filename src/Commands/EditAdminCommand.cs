@@ -72,10 +72,7 @@ public class EditAdminCommand : CommandBase
 
             var existingAdmin = await AdminDbManager.GetAdminAsync(targetSteamId);
             var success = await AdminDbManager.EditAdminAsync(targetSteamId, field, value);
-            Core.Scheduler.NextTick(() =>
-            {
-                Reply(context, success ? "editadmin_success" : "editadmin_failed");
-            });
+            await OnMainThreadAsync(() => Reply(context, success ? "editadmin_success" : "editadmin_failed"));
 
             if (success)
             {

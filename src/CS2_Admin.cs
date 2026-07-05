@@ -14,7 +14,9 @@ using SwiftlyS2.Shared.Events;
 using SwiftlyS2.Shared.GameEventDefinitions;
 using SwiftlyS2.Shared.GameEvents;
 using SwiftlyS2.Shared.Misc;
+using SwiftlyS2.Shared.Players;
 using SwiftlyS2.Shared.Plugins;
+using SwiftlyS2.Shared.ProtobufDefinitions;
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Reflection;
@@ -23,8 +25,8 @@ using System.Text.Json.Nodes;
 
 namespace CS2_Admin;
 
-[PluginMetadata(Id = "CS2_Admin", Version = "1.0.16", Name = "CS2_Admin", Author = "CanDaysa", Description = "Comprehensive admin plugin for CS2.")]
-public class CS2_Admin : BasePlugin
+[PluginMetadata(Id = "CS2_Admin", Version = "1.0.18", Name = "CS2_Admin", Author = "CanDaysa", Description = "Comprehensive admin plugin for CS2.")]
+public partial class CS2_Admin : BasePlugin
 {
     private PluginConfig _config = null!;
     private AdminMenuManager _adminMenuManager = null!;
@@ -34,6 +36,7 @@ public class CS2_Admin : BasePlugin
     private PlayerSanctionStateService _sanctionStateService = null!;
     private RecentPlayersTracker _recentPlayersTracker = null!;
     private ChatTagConfigManager _chatTagConfigManager = null!;
+    private TagDbManager _tagDbManager = null!;
 
     private BanManager _banManager = null!;
     private MuteManager _muteManager = null!;
@@ -47,7 +50,6 @@ public class CS2_Admin : BasePlugin
     private DiscordMessageStateDbManager _discordMessageStateDbManager = null!;
     private readonly ConcurrentDictionary<int, (ulong SteamId, string Name, string Ip)> _connectedPlayersCache = new();
     private AdminPlaytimeDbManager _adminPlaytimeDbManager = null!;
-    private RankLeaderboardDbManager _rankLeaderboardDbManager = null!;
     private PlayerIpDbManager _playerIpDbManager = null!;
     private PlayerSessionManager _playerSessionManager = null!;
     private PlayerNameHistoryManager _playerNameHistoryManager = null!;
@@ -125,25 +127,33 @@ public class CS2_Admin : BasePlugin
     private GodCommand _godCmd = null!;
     private AdminReloadCommand _adminReloadCmd = null!;
 
-    private static readonly HashSet<string> BlockedAliases = new(StringComparer.OrdinalIgnoreCase) { "groups" };
-    private static readonly HashSet<string> RawConCollisions = new(StringComparer.OrdinalIgnoreCase) { "say", "kick", "noclip", "give", "map", "restart", "rcon" };
-    private static readonly ConcurrentDictionary<string, long> RecentCmd = new();
-    private const long DedupMs = 100;
-    private const long RetentionMs = 10_000;
+    // --- Reload Duplikasyon Önleme ---
+    // SwiftlyS2'de CommandService.commandsByPlugin sözlüğü STATIC'tir (host'ta tek kopya,
+    // eklenti adına göre anahtarlı) ve DispatchCommand eşleşen TÜM callback'leri çağırır.
+    // Eklenti unload olduğunda framework bu static sözlükten eski callback'leri SİLMEZ;
+    // bu yüzden her reload'da eski + yeni callback'ler birikir ve komutlar 2,3,4,5 kez çalışır.
+    // Çözüm: her wrapper bu instance bayrağını kontrol eder. Unload() bayrağı false yapınca
+    // eski (stale) handler'lar sözlükte kalsalar bile hiçbir şey yapmadan döner. Böylece
+    // sözlüğü mutasyona uğratmadan (yani SwiftlyS2'yi crash etmeden) duplikasyon engellenir.
+    private volatile bool _commandsActive = true;
+
     private Timer? _adminPlaytimeTimer;
     private Timer? _adminTimeAutoSendTimer;
     private Timer? _periodicUpdateTimer;
     private int _isTrackingAdminPlaytime;
 
+
     public CS2_Admin(ISwiftlyCore core) : base(core) { }
 
     public override void Load(bool hotReload)
     {
+        _commandsActive = true;
         LoadConfiguration();
         _discord = new DiscordBotService(Core, _config.Discord, _config.Commands);
         InitializeDatabaseManagers();
+        _chatTagConfigManager.SetTagDbManager(_tagDbManager);
         _discord.EnsureGatewayConnection();
-        _adminMenuManager = new AdminMenuManager(Core, _config, _warnManager, _adminDbManager, _groupDbManager, _adminLogManager, _adminPlaytimeDbManager);
+        _adminMenuManager = new AdminMenuManager(Core, _config, _warnManager, _adminDbManager, _groupDbManager, _adminLogManager, _adminPlaytimeDbManager, _tagDbManager);
         _adminLogManager.SetDiscordBotService(_discord);
         InitializeCommands();
         InitializeEventHandlers();
@@ -170,6 +180,12 @@ public class CS2_Admin : BasePlugin
 
     public override void Unload()
     {
+        // commandsByPlugin SwiftlyS2 tarafında static; UnregisterCommand burada çağrılırsa
+        // (reload bir komut dispatch'i içinden tetiklenmişse) sözlük iterasyon sırasında
+        // mutasyona uğrar ve SwiftlyS2 crash olur. Bunun yerine bu instance'ın komutlarını
+        // _commandsActive=false ile pasifleştiriyoruz: stale handler'lar artık hiçbir şey
+        // yapmaz, böylece reload'da duplikasyon oluşmaz (crash riski de yoktur).
+        _commandsActive = false;
         _eventRegistrar?.UnregisterAll();
         _afkManager?.Stop();
         _adminPlaytimeTimer?.Dispose();
@@ -183,14 +199,12 @@ public class CS2_Admin : BasePlugin
         _config = new PluginConfig();
         _chatTagConfigManager ??= new ChatTagConfigManager(Core);
         EnsureConfig<PluginConfig>("config.json", "CS2Admin", PluginConfig.CurrentVersion, cfg => _config = cfg);
-        EnsureConfig<CommandsConfig>("commands.json", "CS2AdminCommands", CommandsConfig.CurrentVersion, cfg => _config.Commands = cfg);
         EnsureConfig<PermissionsConfig>("permissions.json", "CS2AdminPermissions", PermissionsConfig.CurrentVersion, cfg => _config.Permissions = cfg);
         EnsureConfig<MapsFileConfig>("maps.json", "CS2AdminMaps", MapsFileConfig.CurrentVersion, cfg => { _config.MapsFile = cfg; if (cfg.Maps.Count > 0) _config.GameMaps.Maps = cfg.Maps; if (cfg.WorkshopMaps.Count > 0) _config.WorkshopMaps.Maps = cfg.WorkshopMaps; });
         EnsureConfig<DiscordFileConfig>("discord.json", "CS2_Discord", DiscordFileConfig.CurrentVersion, cfg => { _config.Discord = cfg; ServerIdentity.ConfigurePublicIp(cfg.ServerPublicIp); });
         EnsureConfig<AfkFileConfig>("afk.json", "CS2AdminAfk", AfkFileConfig.CurrentVersion, cfg => _config.Afk = cfg);
         LoadChatTags();
         SanitizeCommandAliases();
-        EnsureInternalMenuAliases();
         EnsureBanModeConfig();
         _config.BanMode = PluginConfig.NormalizeBanMode(_config.BanMode);
         DebugSettings.LoggingEnabled = _config.Debug;
@@ -222,7 +236,7 @@ public class CS2_Admin : BasePlugin
         }
         catch (Exception ex)
         {
-            Core.Logger.LogWarningIfEnabled("[CS2Admin] Error loading custom localizer: {Message}\n{StackTrace}", ex.Message, ex.StackTrace);
+            Core.Logger.LogWarningIfEnabled("[CS2Admin] Error loading custom localizer: {Message}", ex.Message);
         }
     }
 
@@ -307,91 +321,11 @@ public class CS2_Admin : BasePlugin
         try
         {
             _chatTagConfigManager.Load();
-            _config.Tags.Enabled = _chatTagConfigManager.Config.ScoreboardEnabled;
-            _config.Tags.PlayerTag = string.IsNullOrWhiteSpace(_chatTagConfigManager.Config.PlayerTag) ? "PLAYER" : _chatTagConfigManager.Config.PlayerTag.Trim();
-            _config.Tags.ShowAdminName = _chatTagConfigManager.Config.ShowAdminName;
         }
         catch (Exception ex)
         {
-            Core.Logger.LogWarningIfEnabled("[CS2Admin] Failed to load tags.json, using defaults: {Msg}", ex.Message);
+            Core.Logger.LogWarningIfEnabled("[CS2Admin] Failed to load chat tags, using defaults: {Msg}", ex.Message);
         }
-    }
-
-    private void SanitizeCommandAliases()
-    {
-        foreach (var prop in typeof(CommandsConfig).GetProperties(BindingFlags.Public | BindingFlags.Instance))
-        {
-            if (prop.PropertyType != typeof(List<string>))
-                continue;
-
-            var aliases = prop.GetValue(_config.Commands) as List<string>;
-            if (aliases == null || aliases.Count == 0)
-                continue;
-
-            var blocked = aliases
-                .Where(x => !string.IsNullOrWhiteSpace(x))
-                .Select(x => x.Trim())
-                .Where(x => BlockedAliases.Contains(x))
-                .ToList();
-
-            if (blocked.Count > 0)
-                Core.Logger.LogWarningIfEnabled("[CS2Admin] Removed blocked command alias(es) [{Blocked}] from {Property}.", string.Join(", ", blocked), prop.Name);
-
-            var cleaned = aliases
-                .Where(x => !string.IsNullOrWhiteSpace(x))
-                .Select(x => x.Trim())
-                .Where(x => !BlockedAliases.Contains(x))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-            prop.SetValue(_config.Commands, cleaned);
-        }
-    }
-
-    private void EnsureInternalMenuAliases()
-    {
-        EnsurePreferredAlias(_config.Commands.Slap, "cs2a_slap");
-        EnsurePreferredAlias(_config.Commands.God, "cs2a_god");
-        EnsurePreferredAlias(_config.Commands.Slay, "cs2a_slay");
-        EnsurePreferredAlias(_config.Commands.Respawn, "cs2a_respawn");
-        EnsurePreferredAlias(_config.Commands.ChangeTeam, "cs2a_team");
-        EnsurePreferredAlias(_config.Commands.MixTeam, "cs2a_mixteam");
-        EnsurePreferredAlias(_config.Commands.NoClip, "cs2a_noclip");
-        EnsurePreferredAlias(_config.Commands.Goto, "cs2a_goto");
-        EnsurePreferredAlias(_config.Commands.Bring, "cs2a_bring");
-        EnsurePreferredAlias(_config.Commands.Freeze, "cs2a_freeze");
-        EnsurePreferredAlias(_config.Commands.Unfreeze, "cs2a_unfreeze");
-        EnsurePreferredAlias(_config.Commands.Resize, "cs2a_resize");
-
-        EnsurePreferredAlias(_config.Commands.Blind, "cs2a_blind");
-        EnsurePreferredAlias(_config.Commands.Glow, "cs2a_glow");
-        EnsurePreferredAlias(_config.Commands.Rgb, "cs2a_rgb");
-        EnsurePreferredAlias(_config.Commands.Beacon, "cs2a_beacon");
-        EnsurePreferredAlias(_config.Commands.Burn, "cs2a_burn");
-        EnsurePreferredAlias(_config.Commands.Disarm, "cs2a_disarm");
-        EnsurePreferredAlias(_config.Commands.Speed, "cs2a_speed");
-        EnsurePreferredAlias(_config.Commands.Gravity, "cs2a_gravity");
-        EnsurePreferredAlias(_config.Commands.Hp, "cs2a_hp");
-        EnsurePreferredAlias(_config.Commands.Money, "cs2a_money");
-        EnsurePreferredAlias(_config.Commands.Give, "cs2a_give");
-        EnsurePreferredAlias(_config.Commands.ChangeMap, "cs2a_map");
-        EnsurePreferredAlias(_config.Commands.ChangeWSMap, "cs2a_wsmap");
-        EnsurePreferredAlias(_config.Commands.RestartGame, "cs2a_restart");
-        EnsurePreferredAlias(_config.Commands.HeadshotOn, "cs2a_hson");
-        EnsurePreferredAlias(_config.Commands.HeadshotOff, "cs2a_hsoff");
-        EnsurePreferredAlias(_config.Commands.BunnyOn, "cs2a_bunnyon");
-        EnsurePreferredAlias(_config.Commands.BunnyOff, "cs2a_bunnyoff");
-        EnsurePreferredAlias(_config.Commands.RespawnOn, "cs2a_respawnon");
-        EnsurePreferredAlias(_config.Commands.RespawnOff, "cs2a_respawnoff");
-    }
-
-    private static void EnsurePreferredAlias(List<string>? aliases, string preferredAlias)
-    {
-        if (aliases == null)
-            return;
-
-        aliases.RemoveAll(x => string.Equals(x?.Trim(), preferredAlias, StringComparison.OrdinalIgnoreCase));
-        aliases.Insert(0, preferredAlias);
     }
 
     private void EnsureBanModeConfig()
@@ -439,6 +373,7 @@ public class CS2_Admin : BasePlugin
         _muteManager = new MuteManager(Core);
         _gagManager = new GagManager(Core);
         _warnManager = new WarnManager(Core);
+        _tagDbManager = new TagDbManager(Core);
         _adminDbManager = new AdminDbManager(Core, _groupDbManager);
         _adminLogManager = new AdminLogManager(Core);
         _discord.SetDatabaseManagers(_warnManager, _adminLogManager);
@@ -446,7 +381,6 @@ public class CS2_Admin : BasePlugin
         _discordServerStatusDbManager = new DiscordServerStatusDbManager(Core);
         _discordMessageStateDbManager = new DiscordMessageStateDbManager(Core);
         _adminPlaytimeDbManager = new AdminPlaytimeDbManager(Core, _adminDbManager);
-        _rankLeaderboardDbManager = new RankLeaderboardDbManager(Core);
         _playerIpDbManager = new PlayerIpDbManager(Core);
         _playerSessionManager = new PlayerSessionManager(Core, _adminDbManager);
         _playerNameHistoryManager = new PlayerNameHistoryManager(Core);
@@ -574,7 +508,10 @@ public class CS2_Admin : BasePlugin
                 {
                     _connectedPlayersCache[e.PlayerId] = (player.SteamID, player.Controller.PlayerName ?? "", player.IPAddress ?? "");
                     _ = _playerSessionManager.OpenSessionAsync(player.SteamID, player.Controller.PlayerName, e.PlayerId, player.IPAddress);
-                    _ = _sanctionStateService.RefreshAsync(player.SteamID, player.IPAddress);
+                    // Snapshot'ı yenile VE aktif mute varsa voice'u tekrar uygula. VoiceFlags
+                    // yalnızca komut anında ayarlandığı için reconnect'te muteli oyuncu aksi halde
+                    // konuşabiliyordu; burada snapshot otoriteyle yeniden zorlanıyor.
+                    _ = ReapplyVoiceMuteOnConnectAsync(e.PlayerId, player.SteamID, player.IPAddress);
                     _ = _playerNameHistoryManager.ObserveNameAsync(player.SteamID, player.Controller.PlayerName);
                     
                     int activePlayers = Core.PlayerManager.GetAllPlayers().Count(p => p.IsValid && !p.IsFakeClient);
@@ -606,10 +543,33 @@ public class CS2_Admin : BasePlugin
             if (player?.IsValid == true && !player.IsFakeClient)
             {
                 var steamId = player.SteamID;
+                var ipAddress = player.IPAddress;
+                var playerId = e.PlayerId;
                 _ = Task.Run(async () =>
                 {
                     try
                     {
+                        // Banlı oyuncuyu bağlanma anında at (referans plugin de SteamAuthorize'da
+                        // yapıyor). Periyodik 5 sn'lik enforcement'a bırakılırsa banlı oyuncu
+                        // birkaç saniye sunucuda görünebiliyordu.
+                        var state = await _sanctionStateService.RefreshAsync(steamId, ipAddress);
+                        if (state.Ban != null && state.Ban.IsActive)
+                        {
+                            var ban = state.Ban;
+                            var kickReason = ban.IsPermanent
+                                ? LocalizerHelper.GetWithFallback(Core, "ban_kick_reason_permanent", "You are permanently banned. Reason: {0}", ban.Reason)
+                                : LocalizerHelper.GetWithFallback(Core, "ban_kick_reason_minutes", "You are banned for {0} more minutes. Reason: {1}",
+                                    (int)Math.Ceiling(Math.Max(1, ban.TimeRemaining?.TotalMinutes ?? 1)), ban.Reason);
+
+                            Core.Scheduler.NextTick(() =>
+                            {
+                                var target = Core.PlayerManager.GetPlayer(playerId);
+                                if (target?.IsValid == true)
+                                    target.Kick(kickReason, ENetworkDisconnectionReason.NETWORK_DISCONNECT_REJECT_BANNED);
+                            });
+                            return;
+                        }
+
                         var admin = await _adminDbManager.GetAdminAsync(steamId);
                         if (admin != null && admin.IsActive)
                         {
@@ -688,147 +648,24 @@ public class CS2_Admin : BasePlugin
         _eventRegistrar.RegisterAll();
     }
 
-    private void RegisterCommands()
-    {
-        RegisterCmdList(_config.Commands.AdminRoot, _adminMenuCmd.Execute);
-        RegisterCmdList(_config.Commands.AdminMenu, _adminMenuCmd.Execute);
-        RegisterCmdList(_config.Commands.Asay, _asayCmd.Execute);
-        RegisterCmdList(_config.Commands.Say, _sayCmd.Execute);
-        RegisterCmdList(_config.Commands.Psay, _psayCmd.Execute);
-        RegisterCmdList(_config.Commands.Csay, _csayCmd.Execute);
-        RegisterCmdList(_config.Commands.Hsay, _hsayCmd.Execute);
-        RegisterCmdList(_config.Commands.CallAdmin, _callAdminCmd.Execute);
-        RegisterCmdList(_config.Commands.Report, _reportCmd.Execute);
-        RegisterCmdList(_config.Commands.AdminTime, _adminTimeCmd.Execute);
-        RegisterCmdList(_config.Commands.AdminTimeSend, _adminTimeSendCmd.Execute);
-        RegisterCmdList(_config.Commands.Ban, _banCmd.Execute);
-        RegisterCmdList(_config.Commands.IpBan, _ipBanCmd.Execute);
-        RegisterCmdList(_config.Commands.LastBan, _lastBanCmd.Execute);
-        RegisterCmdList(_config.Commands.AddBan, _addBanCmd.Execute);
-        RegisterCmdList(_config.Commands.Unban, _unbanCmd.Execute);
-        RegisterCmdList(_config.Commands.Warn, _warnCmd.Execute);
-        RegisterCmdList(_config.Commands.Unwarn, _unwarnCmd.Execute);
-        RegisterCmdList(_config.Commands.Mute, _muteCmd.Execute);
-        RegisterCmdList(_config.Commands.Unmute, _unmuteCmd.Execute);
-        RegisterCmdList(_config.Commands.Gag, _gagCmd.Execute);
-        RegisterCmdList(_config.Commands.Ungag, _ungagCmd.Execute);
-        RegisterCmdList(_config.Commands.Silence, _silenceCmd.Execute);
-        RegisterCmdList(_config.Commands.Unsilence, _unsilenceCmd.Execute);
-        RegisterCmdList(_config.Commands.Kick, _kickCmd.Execute);
-        RegisterCmdList(_config.Commands.Slap, _slapCmd.Execute);
-        RegisterCmdList(_config.Commands.Slay, _slayCmd.Execute);
-        RegisterCmdList(_config.Commands.God, _godCmd.Execute);
-        RegisterCmdList(_config.Commands.Respawn, _respawnCmd.Execute);
-        RegisterCmdList(_config.Commands.ChangeTeam, _teamCmd.Execute);
-        RegisterCmdList(_config.Commands.MixTeam, _mixTeamCmd.Execute);
-        RegisterCmdList(_config.Commands.NoClip, _noClipCmd.Execute);
-        RegisterCmdList(_config.Commands.Goto, _gotoCmd.Execute);
-        RegisterCmdList(_config.Commands.Bring, _bringCmd.Execute);
-        RegisterCmdList(_config.Commands.Freeze, _freezeCmd.Execute);
-        RegisterCmdList(_config.Commands.Unfreeze, _unfreezeCmd.Execute);
-        RegisterCmdList(_config.Commands.Resize, _resizeCmd.Execute);
-
-        RegisterCmdList(_config.Commands.Blind, _blindCmd.Execute);
-        RegisterCmdList(_config.Commands.Glow, _glowCmd.Execute);
-        RegisterCmdList(_config.Commands.Rgb, _rgbCmd.Execute);
-        RegisterCmdList(_config.Commands.Beacon, _beaconCmd.Execute);
-        RegisterCmdList(_config.Commands.Bury, _buryCmd.Execute);
-        RegisterCmdList(_config.Commands.Unbury, _unburyCmd.Execute);
-        RegisterCmdList(_config.Commands.Burn, _burnCmd.Execute);
-        RegisterCmdList(_config.Commands.Disarm, _disarmCmd.Execute);
-        RegisterCmdList(_config.Commands.Speed, _speedCmd.Execute);
-        RegisterCmdList(_config.Commands.Gravity, _gravityCmd.Execute);
-        RegisterCmdList(_config.Commands.Rename, _renameCmd.Execute);
-        RegisterCmdList(_config.Commands.Unrename, _unrenameCmd.Execute);
-        RegisterCmdList(_config.Commands.Hp, _hpCmd.Execute);
-        RegisterCmdList(_config.Commands.Money, _moneyCmd.Execute);
-        RegisterCmdList(_config.Commands.Give, _giveCmd.Execute);
-        RegisterCmdList(_config.Commands.Vote, _voteCmd.Execute);
-        RegisterCmdList(_config.Commands.ChangeMap, _mapCmd.Execute);
-        RegisterCmdList(_config.Commands.ChangeWSMap, _wsMapCmd.Execute);
-        RegisterCmdList(_config.Commands.RestartGame, _restartCmd.Execute);
-        RegisterCmdList(_config.Commands.HeadshotOn, _hsToggleCmd.Execute);
-        RegisterCmdList(_config.Commands.HeadshotOff, _hsToggleCmd.Execute);
-        RegisterCmdList(_config.Commands.BunnyOn, _bunnyToggleCmd.Execute);
-        RegisterCmdList(_config.Commands.BunnyOff, _bunnyToggleCmd.Execute);
-        RegisterCmdList(_config.Commands.RespawnOn, _respawnToggleCmd.Execute);
-        RegisterCmdList(_config.Commands.RespawnOff, _respawnToggleCmd.Execute);
-        RegisterCmdList(_config.Commands.Rcon, _rconCmd.Execute);
-        RegisterCmdList(_config.Commands.Cvar, _cvarCmd.Execute);
-        RegisterCmdList(_config.Commands.ListPlayers, _listPlayersCmd.Execute);
-
-        RegisterCmdList(_config.Commands.AddAdmin, _addAdminCmd.Execute);
-        RegisterCmdList(_config.Commands.EditAdmin, _editAdminCmd.Execute);
-        RegisterCmdList(_config.Commands.RemoveAdmin, _removeAdminCmd.Execute);
-        RegisterCmdList(_config.Commands.ListAdmins, _listAdminsCmd.Execute);
-        RegisterCmdList(_config.Commands.AddGroup, _addGroupCmd.Execute);
-        RegisterCmdList(_config.Commands.EditGroup, _editGroupCmd.Execute);
-        RegisterCmdList(_config.Commands.RemoveGroup, _removeGroupCmd.Execute);
-        RegisterCmdList(_config.Commands.ListGroups, _listGroupsCmd.Execute);
-        RegisterCmdList(_config.Commands.AdminReload, _adminReloadCmd.Execute);
-        RegisterCmdList(_config.Commands.Afk, ctx => _afkManager.OnAfkCommand(ctx));
-    }
-
-    private void RegisterCmdList(IReadOnlyList<string> aliases, ICommandService.CommandListener handler)
-    {
-        if (aliases == null) return;
-        foreach (var alias in aliases)
-            RegisterCommand(alias, handler);
-    }
-
-    private void RegisterCommand(string name, ICommandService.CommandListener handler)
-    {
-        if (string.IsNullOrWhiteSpace(name)) return;
-        name = name.Trim();
-        var dedupWrapper = (ICommandService.CommandListener)(ctx =>
-        {
-            if (!ctx.IsSentByPlayer && !(ctx.CommandName ?? "").StartsWith("sw_", StringComparison.OrdinalIgnoreCase))
-                return;
-            if (ShouldSuppressDuplicate(ctx))
-                return;
-            handler(ctx);
-        });
-        var swAlias = "sw_" + name;
-        if (!RawConCollisions.Contains(name))
-            TryRegister(name, dedupWrapper);
-        if (!string.Equals(swAlias, name, StringComparison.OrdinalIgnoreCase))
-            TryRegister(swAlias, dedupWrapper);
-    }
-
-    private void TryRegister(string name, ICommandService.CommandListener handler)
-    {
-        if (!Core.Command.IsCommandRegistered(name))
-            Core.Command.RegisterCommand(name, handler, registerRaw: true);
-    }
-
-    private bool ShouldSuppressDuplicate(ICommandContext ctx)
-    {
-        var cmd = (ctx.CommandName ?? "").TrimStart('!', '/');
-        var args = ctx.Args.Where(a => !string.IsNullOrWhiteSpace(a)).Select(a => a.Trim().ToLowerInvariant()).ToList();
-        var senderKey = ctx.Sender?.SteamID.ToString(CultureInfo.InvariantCulture) ?? (ctx.IsSentByPlayer ? "player" : "console");
-        var key = $"{senderKey}|{cmd}|{string.Join(' ', args)}";
-        var now = Environment.TickCount64;
-        if (RecentCmd.TryGetValue(key, out var last) && now - last <= DedupMs)
-            return true;
-        RecentCmd[key] = now;
-        if (RecentCmd.Count > 1024)
-            foreach (var k in RecentCmd.Keys.Where(k => now - RecentCmd[k] > RetentionMs).ToList())
-                RecentCmd.TryRemove(k, out _);
-        return false;
-    }
-
-    private void EnsureCommandsRegistered()
+    private async Task ReapplyVoiceMuteOnConnectAsync(int playerId, ulong steamId, string? ipAddress)
     {
         try
         {
-            var probe = _config?.Commands?.AdminMenu?.FirstOrDefault();
-            if (!string.IsNullOrWhiteSpace(probe) && Core.Command.IsCommandRegistered(probe))
-                return;
-            RegisterCommands();
+            var state = await _sanctionStateService.RefreshAsync(steamId, ipAddress);
+            if (state.Mute != null && state.Mute.IsActive)
+            {
+                Core.Scheduler.NextTick(() =>
+                {
+                    var live = Core.PlayerManager.GetPlayer(playerId);
+                    if (live?.IsValid == true && !live.IsFakeClient)
+                        live.VoiceFlags = VoiceFlagValue.Muted;
+                });
+            }
         }
         catch (Exception ex)
         {
-            Core.Logger.LogErrorIfEnabled(ex, "[CS2_Admin] Failed to register commands");
+            Core.Logger.LogWarningIfEnabled("[CS2_Admin] Failed to reapply voice mute on connect for {SteamId}: {Msg}", steamId, ex.Message);
         }
     }
 
@@ -879,6 +716,7 @@ public class CS2_Admin : BasePlugin
                 await _muteManager.InitializeAsync();
                 await _gagManager.InitializeAsync();
                 await _warnManager.InitializeAsync();
+                await _tagDbManager.InitializeAsync();
                 await _adminDbManager.InitializeAsync();
                 await _adminLogManager.InitializeAsync();
                 await _serverInfoDbManager.InitializeAsync();
@@ -894,7 +732,7 @@ public class CS2_Admin : BasePlugin
                 await RefreshAdminStateForAllOnlinePlayersAsync();
                 StartAdminPlaytimeTracking();
                 StartAdminTimeAutoSend();
-                _discord.StartBackgroundUpdates(_playerSessionManager, _discordServerStatusDbManager, _rankLeaderboardDbManager, _discordMessageStateDbManager);
+                _discord.StartBackgroundUpdates(_playerSessionManager, _discordServerStatusDbManager, _discordMessageStateDbManager);
 
                 break;
             }

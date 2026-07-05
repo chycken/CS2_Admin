@@ -14,13 +14,22 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- example_configs altındaki referans plugin kopyaları (T3-Admin vb.) derlemeye girmesin.
+         Girerse içlerindeki [Migration(...)] sınıfları bizimkilerle aynı versiyon numarasını
+         taşıdığından FluentMigrator DuplicateMigrationException fırlatır. -->
+    <Compile Remove="example_configs/**/*.cs" />
+    <Content Remove="example_configs/**" />
+    <None Remove="example_configs/**" />
+    <EmbeddedResource Remove="example_configs/**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" ExcludeAssets="runtime" PrivateAssets="all" />
     <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.0" ExcludeAssets="runtime" PrivateAssets="all" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.0" ExcludeAssets="runtime" PrivateAssets="all" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.0" ExcludeAssets="runtime" PrivateAssets="all" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.0" ExcludeAssets="runtime" PrivateAssets="all" />
     <PackageReference Include="FluentMigrator" Version="7.1.0" />
-    <PackageReference Include="FluentMigrator.Runner" Version="7.1.0" />
     <PackageReference Include="FluentMigrator.Runner.MySql" Version="7.1.0" />
     <PackageReference Include="FluentMigrator.Runner.Postgres" Version="7.1.0" />
     <PackageReference Include="FluentMigrator.Runner.SQLite" Version="7.1.0" />

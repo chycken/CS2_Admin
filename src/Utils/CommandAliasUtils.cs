@@ -23,15 +23,15 @@ public static class CommandAliasUtils
         return [.. normalized];
     }
 
+    // Menüler komutları admin.ExecuteCommand("sw_<ad>") ile çalıştırır. Konsol komutu olarak
+    // SADECE RegisterCommands'taki sabit (kanonik) İngilizce adların "sw_" hâli kayıtlıdır
+    // (örn. "slap" -> "sw_slap"). Config alias'ları (ve EnsureInternalMenuAliases'in eklediği
+    // "cs2a_*" adları) konsol komutu olarak ASLA kayıt edilmez; bu yüzden çalıştırmada config'e
+    // bakmak "sw_cs2a_slap" gibi var olmayan bir komut üretip menüyü tamamen bozuyordu.
+    // Bu nedenle çalıştırma adını her zaman kanonik fallback'ten türetiyoruz.
     public static string GetPreferredExecutionAlias(IReadOnlyList<string> aliases, string fallback)
     {
-        var alias = aliases.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x))?.Trim();
-        if (string.IsNullOrWhiteSpace(alias))
-        {
-            alias = fallback;
-        }
-
-        return ToSwAlias(alias);
+        return ToSwAlias(fallback);
     }
 
     public static string ToSwAlias(string alias)

@@ -29,51 +29,21 @@ public class SlapCommand : CommandBase
         _adminDbManager = adminDbManager;
     }
 
-    public override async void Execute(ICommandContext context)
+    public override void Execute(ICommandContext context)
     {
-        try
-        {
-            var args = NormalizeArgs(context.Args, CommandsConfig.Slap);
-
-            if (!HasPerm(context, Permissions.Slap))
+        RunTargetedFunCommand(context, CommandsConfig.Slap, Permissions.Slap, "slap_usage", _adminDbManager, "Slap",
+            includeDeadPlayers: false,
+            targetFilter: p => p.PlayerPawn?.IsValid == true && p.PlayerPawn.Health > 0,
+            onMainThread: (ctx, args, targets, adminName) =>
             {
-                Reply(context, "no_permission");
-                return;
-            }
+                var damage = 0;
+                if (args.Length > 1 && int.TryParse(args[1], out var parsedDamage))
+                {
+                    damage = Math.Clamp(parsedDamage, 0, 100);
+                }
 
-            if (args.Length < 1)
-            {
-                Reply(context, "slap_usage");
-                return;
-            }
+                var prefix = L("prefix");
 
-            var targets = PlayerUtils.FindPlayersByTarget(Core, args[0], includeDeadPlayers: false, caller: context.Sender)
-                .Where(p => p.PlayerPawn?.IsValid == true && p.PlayerPawn.Health > 0)
-                .ToList();
-            if (targets.Count == 0)
-            {
-                Reply(context, "no_valid_targets");
-                return;
-            }
-
-            targets = await PlayerUtils.FilterTargetsByAccessAsync(Core, _adminDbManager, context, targets, allowSelf: true);
-            if (targets.Count == 0)
-            {
-                Reply(context, "no_valid_targets");
-                return;
-            }
-
-            var damage = 0;
-            if (args.Length > 1 && int.TryParse(args[1], out var parsedDamage))
-            {
-                damage = Math.Clamp(parsedDamage, 0, 100);
-            }
-
-            var adminName = context.Sender?.Controller.PlayerName ?? L("console_name");
-            var prefix = L("prefix");
-
-            Core.Scheduler.NextTick(() =>
-            {
                 foreach (var target in targets)
                 {
                     var liveTarget = Core.PlayerManager.GetAllPlayers().FirstOrDefault(p => p.IsValid && p.SteamID == target.SteamID);
@@ -89,7 +59,7 @@ public class SlapCommand : CommandBase
                     if (livePawn.Health <= 0)
                         continue;
 
-                    PlayerUtils.SendNotification(liveTarget, Messages,
+                    PlayerUtils.SendNotification(Core, liveTarget, Messages,
                         $"<font color='#ffcc00'><b>{L("slapped_personal_html")}</b></font><br><br>{L("label_by")}: <font color='#ffcc00'>{ResolveVisibleAdminName(liveTarget, adminName)}</font><br>{L("label_damage")}: <font color='#ffffff'>{damage}</font>",
                         $" \x02{prefix}\x01 {L("slapped_personal_chat", ResolveVisibleAdminName(liveTarget, adminName), damage)}");
 
@@ -100,15 +70,10 @@ public class SlapCommand : CommandBase
                         player.SendChat($" \x02{prefix}\x01 {L("slapped_notification", visibleAdmin, targetName, damage)}");
                     }
 
-                    _ = AdminLogManager.AddLogAsync("slap", adminName, context.Sender?.SteamID ?? 0, liveTarget.SteamID, liveTarget.IPAddress, $"damage={damage}", liveTarget.Controller.PlayerName);
+                    _ = AdminLogManager.AddLogAsync("slap", adminName, ctx.Sender?.SteamID ?? 0, liveTarget.SteamID, liveTarget.IPAddress, $"damage={damage}", liveTarget.Controller.PlayerName);
                     Core.Logger.LogInformation("[CS2_Admin] {Admin} slapped {Target} for {Damage} damage", adminName, targetName, damage);
                 }
             });
-        }
-        catch (Exception ex)
-        {
-            Core.Logger.LogErrorIfEnabled(ex, "[CS2_Admin] Slap command failed");
-        }
     }
 
     private static void ApplySlap(CCSPlayerPawn pawn, int damage)

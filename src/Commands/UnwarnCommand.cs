@@ -92,20 +92,19 @@ public class UnwarnCommand : CommandBase
             var ok = await _warnManager.UnwarnAsync(targetSteamId, reason);
             if (!ok)
             {
-                Core.Scheduler.NextTick(() => Reply(context, "player_not_warned", targetName));
+                await OnMainThreadAsync(() => Reply(context, "player_not_warned", targetName));
                 return;
             }
 
             await _sanctionStateService.RefreshAsync(targetSteamId, targetIp);
 
-            Core.Scheduler.NextTick(() =>
+            await OnMainThreadAsync(() =>
             {
                 Reply(context, "unwarned_notification", targetName, reason);
-
                 var onlineTarget = Core.PlayerManager.GetAllPlayers().FirstOrDefault(p => p.IsValid && p.SteamID == targetSteamId);
                 if (onlineTarget != null)
                 {
-                    PlayerUtils.SendNotification(
+                    PlayerUtils.SendNotification(Core, 
                         onlineTarget,
                         Messages,
                         $"<font color='#00ff00'><b>{L("unwarned_personal_html")}</b></font><br><br>{L("label_reason")}: <font color='#ffffff'>{reason}</font>",

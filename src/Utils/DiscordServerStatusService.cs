@@ -283,17 +283,11 @@ public class DiscordServerStatusService
 
     private string T(string key, string fallback, params object[] args)
     {
-        try
-        {
-            var localizer = PluginLocalizer.Get(_core);
-            var value = args.Length == 0 ? localizer[key] : localizer[key, args];
-            return string.Equals(value, key, StringComparison.OrdinalIgnoreCase)
-                ? (args.Length == 0 ? fallback : string.Format(System.Globalization.CultureInfo.InvariantCulture, fallback, args))
-                : value;
-        }
-        catch
-        {
-            return args.Length == 0 ? fallback : string.Format(System.Globalization.CultureInfo.InvariantCulture, fallback, args);
-        }
+        // İsimli placeholder'lı ({player}, {reason}, {minutes}...) çeviri anahtarları chat ile AYNI
+        // şekilde çalışsın diye LocalizerHelper üzerinden normalize edip biçimlendiriyoruz. Native
+        // localizer[key, args] yalnızca pozisyonel {0} destekler ve isimli placeholder'ları bozardı.
+        return args.Length == 0
+            ? global::CS2_Admin.Services.LocalizerHelper.GetWithFallback(_core, key, fallback)
+            : global::CS2_Admin.Services.LocalizerHelper.GetWithFallback(_core, key, fallback, args);
     }
 }

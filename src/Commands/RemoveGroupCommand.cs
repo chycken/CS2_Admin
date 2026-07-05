@@ -47,10 +47,7 @@ public class RemoveGroupCommand : CommandBase
             var adminSteamId = context.Sender?.SteamID ?? 0;
 
             var success = await GroupDbManager.RemoveGroupAsync(name);
-            Core.Scheduler.NextTick(() =>
-            {
-                Reply(context, success ? "removegroup_success" : "removegroup_failed");
-            });
+            await OnMainThreadAsync(() => Reply(context, success ? "removegroup_success" : "removegroup_failed"));
 
             if (success)
             {

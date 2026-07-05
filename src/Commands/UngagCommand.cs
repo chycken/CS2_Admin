@@ -104,21 +104,20 @@ public sealed class UngagCommand : CommandBase
                 var existingGag = await _gagManager.GetActiveGagAsync(target.SteamId);
                 if (existingGag == null)
                 {
-                    Core.Scheduler.NextTick(() => Reply(context, "player_not_gagged", target.Name));
+                    await OnMainThreadAsync(() => Reply(context, "player_not_gagged", target.Name));
                     continue;
                 }
 
                 await _gagManager.UngagAsync(target.SteamId, reason);
                 await _sanctionStateService.RefreshAsync(target.SteamId, target.IpAddress);
 
-                Core.Scheduler.NextTick(() =>
+                await OnMainThreadAsync(() =>
                 {
                     BroadcastNotification(adminName, "ungagged_notification", target.Name, reason);
-
                     var targetPlayer = Core.PlayerManager.GetAllPlayers().FirstOrDefault(p => p.IsValid && p.SteamID == target.SteamId);
                     if (targetPlayer != null)
                     {
-                        PlayerUtils.SendNotification(targetPlayer, Messages,
+                        PlayerUtils.SendNotification(Core, targetPlayer, Messages,
                             $"<font color='#00ff00'><b>{L("ungagged_personal_html")}</b></font><br><br>{L("label_reason")}: <font color='#ffffff'>{reason}</font>",
                             $" \x02{L("prefix")}\x01 {L("ungagged_personal_chat", reason)}");
                     }
@@ -140,30 +139,6 @@ public sealed class UngagCommand : CommandBase
         return await PlayerUtils.CanAdminTargetAsync(Core, _adminDbManager, context, targetSteamId);
     }
 
-    private bool RejectGroupTargets(ICommandContext context, string[] args)
-    {
-        if (args.Length == 0)
-            return false;
-
-        if (PlayerUtils.IsGroupTarget(args[0]))
-        {
-            Reply(context, "sanction_group_targets_not_allowed");
-            return true;
-        }
-
-        return false;
-    }
-
-    private bool EnsureSinglePunishTarget(ICommandContext context, IReadOnlyCollection<IPlayer> targets, string rawTarget)
-    {
-        if (targets.Count <= 1)
-            return true;
-
-        ReplyRaw(context, $"Target '{rawTarget}' matched multiple players. Use `#userid` or full name.");
-        return false;
-    }
-
-    private readonly record struct PunishTargetSnapshot(int PlayerId, ulong SteamId, string Name, string? IpAddress);
 }
 
 

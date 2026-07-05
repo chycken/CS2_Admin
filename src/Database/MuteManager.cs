@@ -95,32 +95,37 @@ public class MuteManager
                 var admin = _currentAdmin.Value ?? new AdminContext();
                 using var connection = _core.Database.GetConnection("mysql_detailed");
 
-                var mute = connection.QueryFirstOrDefault<Mute>(
-                    $@"SELECT * FROM `admin_mutes` WHERE `steamid` = @SteamId AND {PunishmentQueryCompat.ActiveStatusWhere} ORDER BY `created_at` DESC LIMIT 1",
-                    new { SteamId = steamId }
-                );
+                // TÜM aktif mute satırlarını tek seferde pasifleştir (Ban ile aynı davranış).
+                // Eski kod yalnızca LIMIT 1 ile tek satır güncelliyordu; mükerrer aktif satır
+                // varsa biri aktif kalıp "zaten muteli" hatasının kalıcı olmasına yol açıyordu.
+                var affected = connection.Execute(
+                    $@"UPDATE `admin_mutes`
+                       SET `status` = @Status,
+                           `unmute_admin_name` = @UnmuteAdminName,
+                           `unmute_admin_steamid` = @UnmuteAdminSteamId,
+                           `unmute_reason` = @UnmuteReason,
+                           `unmute_date` = @UnmuteDate
+                       WHERE `steamid` = @SteamId
+                         AND {PunishmentQueryCompat.ActiveStatusWhere}",
+                    new
+                    {
+                        SteamId = steamId,
+                        Status = MuteStatusNames.Unmuted,
+                        UnmuteAdminName = admin.Name,
+                        UnmuteAdminSteamId = admin.SteamId,
+                        UnmuteReason = unmuteReason,
+                        UnmuteDate = DateTime.UtcNow
+                    });
 
-                if (mute == null)
-                {
-                    return false;
-                }
-
-                mute.Status = MuteStatus.Unmuted;
-                mute.UnmuteAdminName = admin.Name;
-                mute.UnmuteAdminSteamId = admin.SteamId;
-                mute.UnmuteReason = unmuteReason;
-                mute.UnmuteDate = DateTime.UtcNow;
-
-                connection.Update(mute);
                 _muteCache.TryRemove(steamId, out _);
                 _core.Logger.LogInformationIfEnabled(
-                    "[CS2_Admin][Trace][Mute] unmute steamid={SteamId} muteId={MuteId} admin={Admin} reason={Reason}",
+                    "[CS2_Admin][Trace][Mute] unmute steamid={SteamId} affected={Affected} admin={Admin} reason={Reason}",
                     steamId,
-                    mute.Id,
-                    mute.UnmuteAdminName ?? "-",
-                    mute.UnmuteReason ?? "-");
+                    affected,
+                    admin.Name,
+                    unmuteReason);
 
-                return true;
+                return affected > 0;
             }
             catch (Exception ex)
             {
@@ -290,12 +295,12 @@ public class MuteManager
                 using var connection = _core.Database.GetConnection("mysql_detailed");
                 
                 var cleaned = connection.Execute(
-                    $@"UPDATE `admin_mutes` 
-                      SET `status` = '3' 
-                      WHERE {PunishmentQueryCompat.ActiveStatusWhere} 
-                        AND `expires_at` IS NOT NULL 
+                    $@"UPDATE `admin_mutes`
+                      SET `status` = @Status
+                      WHERE {PunishmentQueryCompat.ActiveStatusWhere}
+                        AND `expires_at` IS NOT NULL
                         AND `expires_at` <= @Now",
-                    new { Now = DateTime.UtcNow }
+                    new { Now = DateTime.UtcNow, Status = MuteStatusNames.Expired }
                 );
 
                 if (cleaned > 0)

@@ -101,20 +101,19 @@ public class WarnCommand : CommandBase
             var ok = await _warnManager.AddWarnAsync(targetSteamId, duration, reason);
             if (!ok)
             {
-                Core.Scheduler.NextTick(() => Reply(context, "warn_db_error"));
+                await OnMainThreadAsync(() => Reply(context, "warn_db_error"));
                 return;
             }
 
             await _sanctionStateService.RefreshAsync(targetSteamId, targetIp);
 
-            Core.Scheduler.NextTick(() =>
+            await OnMainThreadAsync(() =>
             {
                 ReplyRaw(context, SafeLocalize("warn_sent_admin", "Warning sent successfully."));
-
                 var onlineTarget = Core.PlayerManager.GetAllPlayers().FirstOrDefault(p => p.IsValid && p.SteamID == targetSteamId);
                 if (onlineTarget != null)
                 {
-                    PlayerUtils.SendNotification(
+                    PlayerUtils.SendNotification(Core, 
                         onlineTarget,
                         Messages,
                         $"<font color='#ffd700'><b>{L("warned_personal_html")}</b></font><br><br>{L("label_reason")}: <font color='#ffffff'>{reason}</font>",
@@ -183,7 +182,7 @@ public class WarnCommand : CommandBase
             var option = new ButtonMenuOption(optionText) { CloseAfterClick = true };
             option.Click += (_, args) =>
             {
-                Core.Scheduler.NextTick(() => OpenWarnReasonMenu(args.Player, snapshot));
+                OpenWarnReasonMenu(args.Player, snapshot);
                 return ValueTask.CompletedTask;
             };
             builder.AddOption(option);
@@ -239,13 +238,9 @@ public class WarnCommand : CommandBase
 
         if (!await TryApplyWarnFromMenuAsync(contextLike, duration, reason))
         {
-            Core.Scheduler.NextTick(() =>
-                admin.SendChat($" \x02{L("prefix")}\x01 {L("warn_db_error")}"));
             return;
         }
 
-        Core.Scheduler.NextTick(() =>
-            admin.SendChat($" \x02{L("prefix")}\x01 {SafeLocalize("warn_sent_admin", "Warning sent successfully.")}"));
     }
 
     private async Task<bool> TryApplyWarnFromMenuAsync(WarnExecutionContext execution, int duration, string reason)
@@ -255,18 +250,18 @@ public class WarnCommand : CommandBase
         if (!ok)
             return false;
 
-        var onlineTarget = Core.PlayerManager.GetAllPlayers().FirstOrDefault(p => p.IsValid && p.SteamID == execution.TargetSteamId);
-        if (onlineTarget != null)
+        await OnMainThreadAsync(() =>
         {
-            Core.Scheduler.NextTick(() =>
+            var onlineTarget = Core.PlayerManager.GetAllPlayers().FirstOrDefault(p => p.IsValid && p.SteamID == execution.TargetSteamId);
+            if (onlineTarget != null)
             {
-                PlayerUtils.SendNotification(
+                PlayerUtils.SendNotification(Core, 
                     onlineTarget,
                     Messages,
                     $"<font color='#ffd700'><b>{L("warned_personal_html")}</b></font><br><br>{L("label_reason")}: <font color='#ffffff'>{reason}</font>",
                     $" \x02{L("prefix")}\x01 {L("warned_personal_chat", reason)}");
-            });
-        }
+            }
+        });
 
         await AdminLogManager.AddLogAsync("warn", execution.AdminName, execution.AdminSteamId, execution.TargetSteamId, null, $"duration={duration};reason={reason};source=menu", execution.TargetName);
         return true;
