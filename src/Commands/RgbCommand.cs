@@ -30,82 +30,50 @@ public class RgbCommand : CommandBase
         _adminDbManager = adminDbManager;
     }
 
-    public override async void Execute(ICommandContext context)
+    public override void Execute(ICommandContext context)
     {
-        try
-        {
-            var args = NormalizeArgs(context.Args, CommandsConfig.Rgb);
-
-            if (!HasPerm(context, Permissions.Rgb))
+        RunTargetedFunCommand(context, CommandsConfig.Rgb, Permissions.Rgb, "rgb_usage", _adminDbManager, "Rgb",
+            includeDeadPlayers: false,
+            targetFilter: p => p.PlayerPawn?.IsValid == true && p.PlayerPawn.Health > 0,
+            onMainThread: (ctx, args, targets, adminName) =>
             {
-                Reply(context, "no_permission");
-                return;
-            }
+                var durationSeconds = 30;
+                var stopRequested = args.Length > 1 && (args[1].Equals("off", StringComparison.OrdinalIgnoreCase) || args[1] == "0");
 
-            if (args.Length < 1)
-            {
-                Reply(context, "rgb_usage");
-                return;
-            }
+                if (args.Length > 1 && !stopRequested && int.TryParse(args[1], out var parsedDuration))
+                    durationSeconds = Math.Clamp(parsedDuration, 1, 300);
 
-            var durationSeconds = 30;
-            var stopRequested = args.Length > 1 && (args[1].Equals("off", StringComparison.OrdinalIgnoreCase) || args[1] == "0");
+                var started = 0;
+                var stopped = 0;
 
-            if (args.Length > 1 && !stopRequested && int.TryParse(args[1], out var parsedDuration))
-                durationSeconds = Math.Clamp(parsedDuration, 1, 300);
-
-            var targets = PlayerUtils.FindPlayersByTarget(Core, args[0], includeDeadPlayers: false, caller: context.Sender)
-                .Where(p => p.PlayerPawn?.IsValid == true && p.PlayerPawn.Health > 0)
-                .ToList();
-            if (targets.Count == 0)
-            {
-                Reply(context, "no_valid_targets");
-                return;
-            }
-
-            targets = await PlayerUtils.FilterTargetsByAccessAsync(Core, _adminDbManager, context, targets, allowSelf: true);
-            if (targets.Count == 0)
-            {
-                Reply(context, "no_valid_targets");
-                return;
-            }
-
-            var started = 0;
-            var stopped = 0;
-            var adminName = context.Sender?.Controller.PlayerName ?? L("console_name");
-
-            foreach (var target in targets)
-            {
-                if (stopRequested)
+                foreach (var target in targets)
                 {
-                    if (_rgbPlayers.Remove(target.PlayerID))
+                    if (stopRequested)
                     {
-                        StopRgbEffect(target);
-                        stopped++;
+                        if (_rgbPlayers.Remove(target.PlayerID))
+                        {
+                            StopRgbEffect(target);
+                            stopped++;
+                        }
+                        continue;
                     }
-                    continue;
+
+                    _rgbPlayers.Add(target.PlayerID);
+                    StartRgbEffect(target, durationSeconds);
+                    started++;
                 }
 
-                _rgbPlayers.Add(target.PlayerID);
-                StartRgbEffect(target, durationSeconds);
-                started++;
-            }
+                if (stopRequested)
+                {
+                    ReplyRaw(ctx, L("rgb_stopped", stopped));
+                    _ = AdminLogManager.AddLogAsync("rgboff", adminName, ctx.Sender?.SteamID ?? 0, null, null, $"targets={stopped}");
+                    return;
+                }
 
-            if (stopRequested)
-            {
-                ReplyRaw(context, L("rgb_stopped", stopped));
-                _ = AdminLogManager.AddLogAsync("rgboff", adminName, context.Sender?.SteamID ?? 0, null, null, $"targets={stopped}");
-                return;
-            }
-
-            BroadcastNotification(adminName, "rgb_started", FormatTargetName(targets), durationSeconds);
-            _ = AdminLogManager.AddLogAsync("rgbon", adminName, context.Sender?.SteamID ?? 0, null, null, $"targets={started};duration={durationSeconds}");
-            Core.Logger.LogInformation("[CS2_Admin] {Admin} started RGB glow for {Count} player(s)", adminName, started);
-        }
-        catch (Exception ex)
-        {
-            Core.Logger.LogErrorIfEnabled(ex, "[CS2_Admin] Rgb command failed");
-        }
+                BroadcastNotification(adminName, "rgb_started", FormatTargetName(targets), durationSeconds);
+                _ = AdminLogManager.AddLogAsync("rgbon", adminName, ctx.Sender?.SteamID ?? 0, null, null, $"targets={started};duration={durationSeconds}");
+                Core.Logger.LogInformation("[CS2_Admin] {Admin} started RGB glow for {Count} player(s)", adminName, started);
+            });
     }
 
     private void StartRgbEffect(IPlayer player, int durationSeconds)

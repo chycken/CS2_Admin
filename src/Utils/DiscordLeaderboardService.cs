@@ -12,7 +12,6 @@ public class DiscordLeaderboardService
     private readonly string _leaderboardChannelId;
     private readonly int _leaderboardTopLimit;
     private PlayerSessionManager? _playerSessionManager;
-    private RankLeaderboardDbManager? _rankLeaderboardDbManager;
     private DiscordMessageStateDbManager? _discordMessageStateDbManager;
 
     public DiscordLeaderboardService(ISwiftlyCore core, DiscordRestClient restClient,
@@ -25,27 +24,21 @@ public class DiscordLeaderboardService
     }
 
     public void SetDatabaseManagers(PlayerSessionManager? psm,
-        RankLeaderboardDbManager? rldm,
         DiscordMessageStateDbManager? dmsdm)
     {
         _playerSessionManager = psm;
-        _rankLeaderboardDbManager = rldm;
         _discordMessageStateDbManager = dmsdm;
     }
 
     public async Task UpsertLeaderboardMessagesAsync()
     {
-        if (_playerSessionManager == null || _rankLeaderboardDbManager == null || _discordMessageStateDbManager == null || string.IsNullOrWhiteSpace(_leaderboardChannelId))
+        if (_playerSessionManager == null || _discordMessageStateDbManager == null || string.IsNullOrWhiteSpace(_leaderboardChannelId))
         {
             return;
         }
 
         try
         {
-            await UpsertSharedLeaderboardMessageAsync(
-                $"leaderboard:points:{_leaderboardChannelId}",
-                await BuildPointsLeaderboardEmbedAsync());
-
             await UpsertSharedLeaderboardMessageAsync(
                 $"leaderboard:playtime:{_leaderboardChannelId}",
                 await BuildPlaytimeLeaderboardEmbedAsync());
@@ -79,51 +72,6 @@ public class DiscordLeaderboardService
         }
     }
 
-    private async Task<object> BuildPointsLeaderboardEmbedAsync()
-    {
-        var entries = _rankLeaderboardDbManager == null
-            ? []
-            : await _rankLeaderboardDbManager.GetTopPointsAsync(_leaderboardTopLimit);
-
-        var fields = new List<object>();
-
-        if (entries.Count == 0)
-        {
-            fields.Add(new { name = "No data", value = "No rank data found in rank_base yet.", inline = false });
-        }
-        else
-        {
-            var leftColumn = entries.Take((entries.Count + 1) / 2).ToList();
-            var rightColumn = entries.Skip(leftColumn.Count).ToList();
-
-            fields.Add(new
-            {
-                name = "\u200B",
-                value = BuildPointsLeaderboardColumn(leftColumn, 1),
-                inline = true
-            });
-
-            if (rightColumn.Count > 0)
-            {
-                fields.Add(new
-                {
-                    name = "\u200B",
-                    value = BuildPointsLeaderboardColumn(rightColumn, leftColumn.Count + 1),
-                    inline = true
-                });
-            }
-        }
-
-        return new
-        {
-            title = $":trophy: Top 10 Rank",
-            color = 0xF1C40F,
-            fields = fields.ToArray(),
-            footer = new { text = $"Last update | {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC" },
-            timestamp = DateTime.UtcNow.ToString("o")
-        };
-    }
-
     private async Task<object> BuildPlaytimeLeaderboardEmbedAsync()
     {
         var entries = _playerSessionManager == null
@@ -143,7 +91,7 @@ public class DiscordLeaderboardService
 
             fields.Add(new
             {
-                name = "\u200B",
+                name = "​",
                 value = BuildPlaytimeLeaderboardColumn(leftColumn, 1),
                 inline = true
             });
@@ -152,7 +100,7 @@ public class DiscordLeaderboardService
             {
                 fields.Add(new
                 {
-                    name = "\u200B",
+                    name = "​",
                     value = BuildPlaytimeLeaderboardColumn(rightColumn, leftColumn.Count + 1),
                     inline = true
                 });
@@ -178,25 +126,6 @@ public class DiscordLeaderboardService
             var rank = startRank + i;
             lines.Add($"{DiscordHelpers.GetRankPrefix(rank)} {DiscordHelpers.BuildSteamProfileMarkdown(entry.PlayerName, entry.SteamId)}");
             lines.Add($"Playtime: `{DiscordHelpers.FormatDurationFromSeconds(entry.TotalSeconds)}`");
-            if (i < entries.Count - 1)
-            {
-                lines.Add(string.Empty);
-            }
-        }
-
-        return string.Join("\n", lines);
-    }
-
-    private static string BuildPointsLeaderboardColumn(IReadOnlyList<RankLeaderboardEntry> entries, int startRank)
-    {
-        var lines = new List<string>();
-        for (var i = 0; i < entries.Count; i++)
-        {
-            var entry = entries[i];
-            var rank = startRank + i;
-            lines.Add($"{DiscordHelpers.GetRankPrefix(rank)} {DiscordHelpers.BuildSteamProfileMarkdown(entry.Name, entry.Steam)}");
-            lines.Add($"Points: `{entry.Points}`");
-            lines.Add($"Kills: `{entry.Kills}` | Deaths: `{entry.Deaths}`");
             if (i < entries.Count - 1)
             {
                 lines.Add(string.Empty);

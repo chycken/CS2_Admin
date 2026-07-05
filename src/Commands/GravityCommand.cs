@@ -29,94 +29,69 @@ public class GravityCommand : CommandBase
         _adminDbManager = adminDbManager;
     }
 
-    public override async void Execute(ICommandContext context)
+    public override void Execute(ICommandContext context)
     {
-        try
-        {
-            var args = NormalizeArgs(context.Args, CommandsConfig.Gravity);
-
-            if (!HasPerm(context, Permissions.Gravity))
+        RunTargetedFunCommand(context, CommandsConfig.Gravity, Permissions.Gravity, "gravity_usage", _adminDbManager, "Gravity",
+            includeDeadPlayers: false,
+            minArgs: 2,
+            onMainThread: (ctx, args, targets, adminName) =>
             {
-                Reply(context, "no_permission");
-                return;
-            }
-
-            if (args.Length < 2 || !float.TryParse(args[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var scale))
-            {
-                Reply(context, "gravity_usage");
-                return;
-            }
-
-            scale = Math.Clamp(scale, 0.1f, 10.0f);
-
-            var targets = PlayerUtils.FindPlayersByTarget(Core, args[0], includeDeadPlayers: false, caller: context.Sender);
-            if (targets.Count == 0)
-            {
-                Reply(context, "no_valid_targets");
-                return;
-            }
-
-            targets = await PlayerUtils.FilterTargetsByAccessAsync(Core, _adminDbManager, context, targets, allowSelf: true);
-            if (targets.Count == 0)
-            {
-                Reply(context, "no_valid_targets");
-                return;
-            }
-
-            var applied = 0;
-            foreach (var target in targets)
-            {
-                var pawn = target.PlayerPawn;
-                if (pawn?.IsValid != true)
-                    continue;
-
-                var playerId = target.PlayerID;
-
-                if (Math.Abs(scale - 1.0f) < 0.01f)
+                if (!float.TryParse(args[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var scale))
                 {
-                    _gravityOverrides.Remove(playerId);
-                }
-                else
-                {
-                    _gravityOverrides[playerId] = scale;
-                    StartGravityEnforcer(target.SteamID, playerId, scale);
+                    Reply(ctx, "gravity_usage");
+                    return;
                 }
 
-                try
+                scale = Math.Clamp(scale, 0.1f, 10.0f);
+
+                var applied = 0;
+                foreach (var target in targets)
                 {
-                    pawn.GravityScale = scale;
-                    pawn.GravityScaleUpdated();
+                    var pawn = target.PlayerPawn;
+                    if (pawn?.IsValid != true)
+                        continue;
+
+                    var playerId = target.PlayerID;
+
+                    if (Math.Abs(scale - 1.0f) < 0.01f)
+                    {
+                        _gravityOverrides.Remove(playerId);
+                    }
+                    else
+                    {
+                        _gravityOverrides[playerId] = scale;
+                        StartGravityEnforcer(target.SteamID, playerId, scale);
+                    }
+
+                    try
+                    {
+                        pawn.GravityScale = scale;
+                        pawn.GravityScaleUpdated();
+                    }
+                    catch
+                    {
+                        try { pawn.GravityScale = scale; } catch (Exception ex) { Core.Logger.LogErrorIfEnabled(ex, "[CS2_Admin] GravityScale fallback failed for {SteamId}", target.SteamID); }
+                    }
+
+                    applied++;
+
+                    PlayerUtils.SendNotification(Core, target, Messages,
+                        $"<font color='#ffd700'><b>{L("gravity")}</b></font><br><br>{L("label_value")}: <font color='#ffd700'>{scale.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}x</font>",
+                        $" \x02{L("prefix")}\x01 {L("gravity_personal_chat", scale.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))}");
                 }
-                catch
+
+                if (applied == 0)
                 {
-                    try { pawn.GravityScale = scale; } catch (Exception ex) { Core.Logger.LogErrorIfEnabled(ex, "[CS2_Admin] GravityScale fallback failed for {SteamId}", target.SteamID); }
+                    Reply(ctx, "no_valid_targets");
+                    return;
                 }
 
-                applied++;
+                var targetLabel = FormatTargetName(targets);
+                BroadcastNotification(adminName, "gravity_notification", targetLabel, scale.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture));
 
-                PlayerUtils.SendNotification(target, Messages,
-                    $"<font color='#ffd700'><b>{L("gravity")}</b></font><br><br>{L("label_value")}: <font color='#ffd700'>{scale.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}x</font>",
-                    $" \x02{L("prefix")}\x01 {L("gravity_personal_chat", scale.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))}");
-            }
-
-            if (applied == 0)
-            {
-                Reply(context, "no_valid_targets");
-                return;
-            }
-
-            var adminName = context.Sender?.Controller.PlayerName ?? L("console_name");
-
-            var targetLabel = FormatTargetName(targets);
-            BroadcastNotification(adminName, "gravity_notification", targetLabel, scale.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture));
-
-            _ = AdminLogManager.AddLogAsync("gravity", adminName, context.Sender?.SteamID ?? 0, null, null, $"targets={applied};scale={scale.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)}");
-            Core.Logger.LogInformationIfEnabled("[CS2_Admin] {Admin} set gravity of {Count} player(s) to {Scale}", adminName, applied, scale);
-        }
-        catch (Exception ex)
-        {
-            Core.Logger.LogErrorIfEnabled(ex, "[CS2_Admin] Gravity command failed");
-        }
+                _ = AdminLogManager.AddLogAsync("gravity", adminName, ctx.Sender?.SteamID ?? 0, null, null, $"targets={applied};scale={scale.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)}");
+                Core.Logger.LogInformationIfEnabled("[CS2_Admin] {Admin} set gravity of {Count} player(s) to {Scale}", adminName, applied, scale);
+            });
     }
 
     private void StartGravityEnforcer(ulong steamId, int playerId, float scale)

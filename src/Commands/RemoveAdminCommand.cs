@@ -53,14 +53,15 @@ public class RemoveAdminCommand : CommandBase
 
             var existingAdmin = await AdminDbManager.GetAdminAsync(targetSteamId);
             var success = await AdminDbManager.RemoveAdminAsync(targetSteamId);
-            Core.Scheduler.NextTick(() =>
+            await OnMainThreadAsync(() =>
             {
                 Reply(context, success ? "removeadmin_success" : "removeadmin_failed", targetSteamId, targetSteamId);
+                if (success)
+                    NotifyOnlinePlayer(targetSteamId, L("removeadmin_revoked"));
             });
 
             if (success)
             {
-                NotifyOnlinePlayer(targetSteamId, L("removeadmin_revoked"));
                 await TryAutoReloadAsync();
                 await ApplyTagToOnlinePlayerAsync(targetSteamId);
                 await AdminLogManager.AddLogAsync("removeadmin", adminName, adminSteamId, targetSteamId, null, "", existingAdmin?.Name);
@@ -77,14 +78,11 @@ public class RemoveAdminCommand : CommandBase
         if (string.IsNullOrWhiteSpace(message))
             return;
 
-        Core.Scheduler.NextTick(() =>
-        {
             var player = Core.PlayerManager.GetAllPlayers().FirstOrDefault(p => p.IsValid && p.SteamID == steamId);
             if (player != null)
             {
                 player.SendChat($" \x02{L("prefix")}\x01 {message}");
             }
-        });
     }
 
     private async Task ApplyTagToOnlinePlayerAsync(ulong steamId)

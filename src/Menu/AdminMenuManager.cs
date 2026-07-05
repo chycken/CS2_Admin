@@ -16,6 +16,7 @@ public class AdminMenuManager
     private readonly PluginConfig _config;
     private readonly WarnManager _warnManager;
     private readonly AdminPlaytimeDbManager _adminPlaytimeDbManager;
+    private readonly TagDbManager _tagDbManager;
     private readonly Dictionary<string, IAdminMenuHandler> _handlers;
 
     public AdminMenuManager(
@@ -25,12 +26,14 @@ public class AdminMenuManager
         AdminDbManager adminDbManager,
         GroupDbManager groupDbManager,
         AdminLogManager adminLogManager,
-        AdminPlaytimeDbManager adminPlaytimeDbManager)
+        AdminPlaytimeDbManager adminPlaytimeDbManager,
+        TagDbManager tagDbManager)
     {
         _core = core;
         _config = config;
         _warnManager = warnManager;
         _adminPlaytimeDbManager = adminPlaytimeDbManager;
+        _tagDbManager = tagDbManager;
         _handlers = new Dictionary<string, IAdminMenuHandler>();
 
         // Register handlers

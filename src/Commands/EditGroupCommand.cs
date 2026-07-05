@@ -49,10 +49,7 @@ public class EditGroupCommand : CommandBase
             var adminSteamId = context.Sender?.SteamID ?? 0;
 
             var success = await GroupDbManager.AddOrUpdateGroupAsync(name, flags, immunity);
-            Core.Scheduler.NextTick(() =>
-            {
-                Reply(context, success ? "editgroup_success" : "editgroup_failed");
-            });
+            await OnMainThreadAsync(() => Reply(context, success ? "editgroup_success" : "editgroup_failed"));
 
             if (success)
             {

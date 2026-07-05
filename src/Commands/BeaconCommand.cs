@@ -32,87 +32,58 @@ public class BeaconCommand : CommandBase
         _adminDbManager = adminDbManager;
     }
 
-    public override async void Execute(ICommandContext context)
+
+
+    public override void Execute(ICommandContext context)
     {
-        try
-        {
-            var args = NormalizeArgs(context.Args, CommandsConfig.Beacon);
-
-            if (!HasPerm(context, Permissions.Beacon))
+        RunTargetedFunCommand(context, CommandsConfig.Beacon, Permissions.Beacon, "beacon_usage", _adminDbManager, "Beacon",
+            includeDeadPlayers: true,
+            onMainThread: (ctx, args, targets, adminName) =>
             {
-                Reply(context, "no_permission");
-                return;
-            }
+                var durationSeconds = 20;
+                var stopRequested = args.Length > 1 && (args[1].Equals("off", StringComparison.OrdinalIgnoreCase) || args[1] == "0");
 
-            if (args.Length < 1)
-            {
-                Reply(context, "beacon_usage");
-                return;
-            }
+                if (args.Length > 1 && !stopRequested && int.TryParse(args[1], out var parsedDuration))
+                    durationSeconds = Math.Clamp(parsedDuration, 1, 120);
 
-            var durationSeconds = 20;
-            var stopRequested = args.Length > 1 && (args[1].Equals("off", StringComparison.OrdinalIgnoreCase) || args[1] == "0");
+                var started = 0;
+                var stopped = 0;
 
-            if (args.Length > 1 && !stopRequested && int.TryParse(args[1], out var parsedDuration))
-                durationSeconds = Math.Clamp(parsedDuration, 1, 120);
-
-            var targets = PlayerUtils.FindPlayersByTarget(Core, args[0], includeDeadPlayers: true, caller: context.Sender);
-            if (targets.Count == 0)
-            {
-                Reply(context, "no_valid_targets");
-                return;
-            }
-
-            targets = await PlayerUtils.FilterTargetsByAccessAsync(Core, _adminDbManager, context, targets, allowSelf: true);
-            if (targets.Count == 0)
-            {
-                Reply(context, "no_valid_targets");
-                return;
-            }
-
-            var started = 0;
-            var stopped = 0;
-            var adminName = context.Sender?.Controller.PlayerName ?? L("console_name");
-
-            foreach (var target in targets)
-            {
-                if (stopRequested)
+                foreach (var target in targets)
                 {
-                    if (_beaconPlayers.Remove(target.PlayerID))
-                        stopped++;
-                    continue;
+                    if (stopRequested)
+                    {
+                        if (_beaconPlayers.Remove(target.PlayerID))
+                            stopped++;
+                        continue;
+                    }
+
+                    _beaconPlayers.Add(target.PlayerID);
+                    StartBeaconEffect(target, durationSeconds);
+                    started++;
                 }
 
-                _beaconPlayers.Add(target.PlayerID);
-                StartBeaconEffect(target, durationSeconds);
-                started++;
-            }
+                if (stopRequested)
+                {
+                    ReplyRaw(ctx, L("beacon_stopped", stopped));
+                    _ = AdminLogManager.AddLogAsync("beacon", adminName, ctx.Sender?.SteamID ?? 0, null, null, $"mode=off;targets={stopped}");
+                    return;
+                }
 
-            if (stopRequested)
-            {
-                ReplyRaw(context, L("beacon_stopped", stopped));
-                _ = AdminLogManager.AddLogAsync("beacon", adminName, context.Sender?.SteamID ?? 0, null, null, $"mode=off;targets={stopped}");
-                return;
-            }
+                BroadcastNotification(adminName, "beacon_started", FormatTargetName(targets), durationSeconds);
 
-            BroadcastNotification(adminName, "beacon_started", FormatTargetName(targets), durationSeconds);
+                foreach (var bTarget in targets)
+                {
+                    var liveBTarget = Core.PlayerManager.GetAllPlayers().FirstOrDefault(p => p.IsValid && p.SteamID == bTarget.SteamID);
+                    if (liveBTarget?.IsValid != true) continue;
+                    PlayerUtils.SendNotification(Core, liveBTarget, Messages,
+                        $"<font color='#e74c3c'><b>{L("beacon_personal_html")}</b></font><br><br>{L("label_duration")}: <font color='#ffd700'>{durationSeconds}s</font><br>{L("label_by")}: <font color='#ffd700'>{ResolveVisibleAdminName(liveBTarget, adminName)}</font>",
+                        $" \x02{L("prefix")}\x01 {L("beacon_personal_chat", ResolveVisibleAdminName(liveBTarget, adminName), durationSeconds)}");
+                }
 
-            foreach (var bTarget in targets)
-            {
-                var liveBTarget = Core.PlayerManager.GetAllPlayers().FirstOrDefault(p => p.IsValid && p.SteamID == bTarget.SteamID);
-                if (liveBTarget?.IsValid != true) continue;
-                PlayerUtils.SendNotification(liveBTarget, Messages,
-                    $"<font color='#e74c3c'><b>{L("beacon_personal_html")}</b></font><br><br>{L("label_duration")}: <font color='#ffd700'>{durationSeconds}s</font><br>{L("label_by")}: <font color='#ffd700'>{ResolveVisibleAdminName(liveBTarget, adminName)}</font>",
-                    $" \x02{L("prefix")}\x01 {L("beacon_personal_chat", ResolveVisibleAdminName(liveBTarget, adminName), durationSeconds)}");
-            }
-
-            _ = AdminLogManager.AddLogAsync("beacon", adminName, context.Sender?.SteamID ?? 0, null, null, $"mode=on;targets={started};duration={durationSeconds}");
-            Core.Logger.LogInformation("[CS2_Admin] {Admin} started beacon for {Count} player(s)", adminName, started);
-        }
-        catch (Exception ex)
-        {
-            Core.Logger.LogErrorIfEnabled(ex, "[CS2_Admin] Beacon command failed");
-        }
+                _ = AdminLogManager.AddLogAsync("beacon", adminName, ctx.Sender?.SteamID ?? 0, null, null, $"mode=on;targets={started};duration={durationSeconds}");
+                Core.Logger.LogInformation("[CS2_Admin] {Admin} started beacon for {Count} player(s)", adminName, started);
+            });
     }
 
     private const int BeaconSegments = 16;

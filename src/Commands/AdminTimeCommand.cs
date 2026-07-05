@@ -31,8 +31,12 @@ public class AdminTimeCommand : CommandBase
         _adminPlaytimeConfig = adminPlaytimeConfig;
     }
 
+
+
     public override async void Execute(ICommandContext context)
     {
+
+
         try
         {
             if (!HasPerm(context, Permissions.AdminTime))
@@ -41,9 +45,10 @@ public class AdminTimeCommand : CommandBase
                 return;
             }
 
+            // DB sorgusunu main thread'de bloklamadan bekle.
             var topAdmins = await _adminPlaytimeDbManager.GetTopAdminsAsync(_adminPlaytimeConfig.MenuTopLimit);
 
-            Core.Scheduler.NextTick(() =>
+            await OnMainThreadAsync(() =>
             {
                 if (context.IsSentByPlayer && context.Sender != null)
                 {

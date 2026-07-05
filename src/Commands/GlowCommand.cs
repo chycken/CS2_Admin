@@ -30,138 +30,104 @@ public class GlowCommand : CommandBase
         _adminDbManager = adminDbManager;
     }
 
-    public override async void Execute(ICommandContext context)
+    public override void Execute(ICommandContext context)
     {
-        try
-        {
-            var args = NormalizeArgs(context.Args, CommandsConfig.Glow);
-
-            if (!HasPerm(context, Permissions.Glow))
+        RunTargetedFunCommand(context, CommandsConfig.Glow, Permissions.Glow, "glow_usage", _adminDbManager, "Glow",
+            includeDeadPlayers: false,
+            minArgs: 2,
+            targetFilter: p => p.PlayerPawn?.IsValid == true && p.PlayerPawn.Health > 0,
+            onMainThread: (ctx, args, targets, adminName) =>
             {
-                Reply(context, "no_permission");
-                return;
-            }
+                var disableGlow = args[1].Equals("off", StringComparison.OrdinalIgnoreCase);
+                var r = 255;
+                var g = 255;
+                var b = 255;
+                var a = 180;
 
-            if (args.Length < 2)
-            {
-                Reply(context, "glow_usage");
-                return;
-            }
+                if (!disableGlow)
+                {
+                    if (TryParseColorName(args[1], out var namedColor))
+                    {
+                        r = namedColor[0];
+                        g = namedColor[1];
+                        b = namedColor[2];
+                    }
+                    else if (args.Length >= 4 &&
+                             int.TryParse(args[1], out var ri) &&
+                             int.TryParse(args[2], out var gi) &&
+                             int.TryParse(args[3], out var bi))
+                    {
+                        r = ri;
+                        g = gi;
+                        b = bi;
+                    }
+                    else
+                    {
+                        Reply(ctx, "glow_usage");
+                        return;
+                    }
 
-            var disableGlow = args[1].Equals("off", StringComparison.OrdinalIgnoreCase);
-            var r = 255;
-            var g = 255;
-            var b = 255;
-            var a = 180;
+                    if (args.Length > 4 && !int.TryParse(args[4], out a))
+                    {
+                        Reply(ctx, "glow_usage");
+                        return;
+                    }
 
-            if (!disableGlow)
-            {
-                if (TryParseColorName(args[1], out var namedColor))
-                {
-                    r = namedColor[0];
-                    g = namedColor[1];
-                    b = namedColor[2];
-                }
-                else if (args.Length >= 4 &&
-                         int.TryParse(args[1], out var ri) &&
-                         int.TryParse(args[2], out var gi) &&
-                         int.TryParse(args[3], out var bi))
-                {
-                    r = ri;
-                    g = gi;
-                    b = bi;
-                }
-                else
-                {
-                    Reply(context, "glow_usage");
-                    return;
-                }
-
-                if (args.Length > 4 && !int.TryParse(args[4], out a))
-                {
-                    Reply(context, "glow_usage");
-                    return;
+                    r = Math.Clamp(r, 0, 255);
+                    g = Math.Clamp(g, 0, 255);
+                    b = Math.Clamp(b, 0, 255);
+                    a = Math.Clamp(a, 0, 255);
                 }
 
-                r = Math.Clamp(r, 0, 255);
-                g = Math.Clamp(g, 0, 255);
-                b = Math.Clamp(b, 0, 255);
-                a = Math.Clamp(a, 0, 255);
-            }
+                var colorHex = disableGlow ? "#ffffff" : $"#{r:X2}{g:X2}{b:X2}";
 
-            var targets = PlayerUtils.FindPlayersByTarget(Core, args[0], includeDeadPlayers: false, caller: context.Sender)
-                .Where(p => p.PlayerPawn?.IsValid == true && p.PlayerPawn.Health > 0)
-                .ToList();
-            if (targets.Count == 0)
-            {
-                Reply(context, "no_valid_targets");
-                return;
-            }
-
-            targets = await PlayerUtils.FilterTargetsByAccessAsync(Core, _adminDbManager, context, targets, allowSelf: true);
-            if (targets.Count == 0)
-            {
-                Reply(context, "no_valid_targets");
-                return;
-            }
-
-            foreach (var target in targets)
-            {
-                var targetSteamId = target.SteamID;
-                Core.Scheduler.NextTick(() =>
+                foreach (var target in targets)
                 {
+                    var targetSteamId = target.SteamID;
                     var liveTarget = Core.PlayerManager.GetAllPlayers().FirstOrDefault(p => p.IsValid && p.SteamID == targetSteamId);
                     if (liveTarget?.IsValid != true)
-                        return;
+                        continue;
 
                     if (disableGlow)
                         ClearGlow(liveTarget);
                     else
                         ApplyGlow(liveTarget, r, g, b, a);
-                });
-            }
+                }
 
-            var adminName = context.Sender?.Controller.PlayerName ?? L("console_name");
-            var colorHex = disableGlow ? "#ffffff" : $"#{r:X2}{g:X2}{b:X2}";
+                foreach (var gTarget in targets)
+                {
+                    var liveG = Core.PlayerManager.GetAllPlayers().FirstOrDefault(p => p.IsValid && p.SteamID == gTarget.SteamID);
+                    if (liveG?.IsValid != true) continue;
+                    if (disableGlow)
+                    {
+                        PlayerUtils.SendNotification(Core, liveG, Messages,
+                            $"<font color='#ecf0f1'><b>{L("glow_off_personal_html")}</b></font><br><br>{L("label_by")}: <font color='#ffd700'>{ResolveVisibleAdminName(liveG, adminName)}</font>",
+                            $" \x02{L("prefix")}\x01 {L("glow_off_personal_chat", ResolveVisibleAdminName(liveG, adminName))}");
+                    }
+                    else
+                    {
+                        PlayerUtils.SendNotification(Core, liveG, Messages,
+                            $"<font color='{colorHex}'><b>{L("glow_personal_html")}</b></font><br><br><font color='{colorHex}'>■</font> RGB: {r},{g},{b}<br>{L("label_by")}: <font color='#ffd700'>{ResolveVisibleAdminName(liveG, adminName)}</font>",
+                            $" \x02{L("prefix")}\x01 {L("glow_personal_chat", ResolveVisibleAdminName(liveG, adminName), $"{r},{g},{b}")}");
+                    }
+                }
 
-            foreach (var gTarget in targets)
-            {
-                var liveG = Core.PlayerManager.GetAllPlayers().FirstOrDefault(p => p.IsValid && p.SteamID == gTarget.SteamID);
-                if (liveG?.IsValid != true) continue;
                 if (disableGlow)
                 {
-                    PlayerUtils.SendNotification(liveG, Messages,
-                        $"<font color='#ecf0f1'><b>{L("glow_off_personal_html")}</b></font><br><br>{L("label_by")}: <font color='#ffd700'>{ResolveVisibleAdminName(liveG, adminName)}</font>",
-                        $" \x02{L("prefix")}\x01 {L("glow_off_personal_chat", ResolveVisibleAdminName(liveG, adminName))}");
+                    BroadcastNotification(adminName, "glow_off_notification", FormatTargetName(targets));
                 }
                 else
                 {
-                    PlayerUtils.SendNotification(liveG, Messages,
-                        $"<font color='{colorHex}'><b>{L("glow_personal_html")}</b></font><br><br><font color='{colorHex}'>■</font> RGB: {r},{g},{b}<br>{L("label_by")}: <font color='#ffd700'>{ResolveVisibleAdminName(liveG, adminName)}</font>",
-                        $" \x02{L("prefix")}\x01 {L("glow_personal_chat", ResolveVisibleAdminName(liveG, adminName), $"{r},{g},{b}")}");
+                    BroadcastNotification(adminName, "glow_notification", FormatTargetName(targets));
                 }
-            }
 
-            if (disableGlow)
-            {
-                BroadcastNotification(adminName, "glow_off_notification", FormatTargetName(targets));
-            }
-            else
-            {
-                BroadcastNotification(adminName, "glow_notification", FormatTargetName(targets));
-            }
+                var details = disableGlow
+                    ? $"targets={targets.Count};off=true"
+                    : $"targets={targets.Count};rgba={r},{g},{b},{a}";
 
-            var details = disableGlow
-                ? $"targets={targets.Count};off=true"
-                : $"targets={targets.Count};rgba={r},{g},{b},{a}";
-
-            _ = AdminLogManager.AddLogAsync("glow", adminName, context.Sender?.SteamID ?? 0, null, null, details);
-            Core.Logger.LogInformation("[CS2_Admin] {Admin} set glow for {Count} player(s)", adminName, targets.Count);
-        }
-        catch (Exception ex)
-        {
-            Core.Logger.LogErrorIfEnabled(ex, "[CS2_Admin] Glow command failed");
-        }
+                _ = AdminLogManager.AddLogAsync("glow", adminName, ctx.Sender?.SteamID ?? 0, null, null, details);
+                Core.Logger.LogInformation("[CS2_Admin] {Admin} set glow for {Count} player(s)", adminName, targets.Count);
+            });
     }
 
     private void ApplyGlow(IPlayer target, int r, int g, int b, int a)

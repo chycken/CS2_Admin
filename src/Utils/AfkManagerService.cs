@@ -255,6 +255,7 @@ public sealed class AfkManagerService
         }
 
         PlayerUtils.SendNotification(
+            _core,
             player,
             _messagesConfig,
             $"<font color='#ffcc00'><b>{L("afk_warning_html", "You will be moved to spectator in {0} seconds for being AFK.", remainingSeconds)}</b></font>",

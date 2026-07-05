@@ -110,7 +110,7 @@ public sealed class MuteCommand : CommandBase
                 var existingMute = await _muteManager.GetActiveMuteFreshAsync(target.SteamId);
                 if (existingMute != null)
                 {
-                    Core.Scheduler.NextTick(() => Reply(context, "player_already_muted", target.Name));
+                    await OnMainThreadAsync(() => Reply(context, "player_already_muted", target.Name));
                     continue;
                 }
 
@@ -118,7 +118,7 @@ public sealed class MuteCommand : CommandBase
                 var muteOk = await _muteManager.AddMuteAsync(target.SteamId, duration, reason);
                 if (!muteOk)
                 {
-                    Core.Scheduler.NextTick(() => Reply(context, "mute_db_error"));
+                    await OnMainThreadAsync(() => Reply(context, "mute_db_error"));
                     continue;
                 }
 
@@ -126,15 +126,14 @@ public sealed class MuteCommand : CommandBase
                 Core.Logger.LogInformationIfEnabled("[CS2_Admin][Debug] mute apply steamid={SteamId} duration={Duration} reason={Reason}", target.SteamId, duration, reason);
                 var durationText = duration <= 0 ? L("duration_permanently") : L("duration_for_minutes", duration);
 
-                Core.Scheduler.NextTick(() =>
+                await OnMainThreadAsync(() =>
                 {
                     BroadcastNotification(adminName, "muted_notification", target.Name, durationText, reason);
-
                     var targetPlayer = Core.PlayerManager.GetAllPlayers().FirstOrDefault(p => p.IsValid && p.SteamID == target.SteamId);
                     if (targetPlayer != null)
                     {
                         var durationDisplay = duration <= 0 ? L("permanent") : L("duration_minutes", duration);
-                        PlayerUtils.SendNotification(targetPlayer, Messages,
+                        PlayerUtils.SendNotification(Core, targetPlayer, Messages,
                             $"<font color='#ff6600'><b>{L("muted_personal_html")}</b></font><br><br>{L("label_duration")}: <font color='#ffcc00'>{durationDisplay}</font><br>{L("label_reason")}: <font color='#ffffff'>{reason}</font>",
                             $" \x02{L("prefix")}\x01 {L("muted_personal_chat", durationText, reason)}");
                         targetPlayer.VoiceFlags = VoiceFlagValue.Muted;
@@ -150,7 +149,7 @@ public sealed class MuteCommand : CommandBase
         catch (Exception ex)
         {
             Core.Logger.LogErrorIfEnabled(ex, "[CS2_Admin] Mute command failed");
-            Core.Scheduler.NextTick(() => Reply(context, "internal_error"));
+            Reply(context, "internal_error");
         }
     }
 
@@ -159,30 +158,6 @@ public sealed class MuteCommand : CommandBase
         return await PlayerUtils.CanAdminTargetAsync(Core, _adminDbManager, context, targetSteamId);
     }
 
-    private bool RejectGroupTargets(ICommandContext context, string[] args)
-    {
-        if (args.Length == 0)
-            return false;
-
-        if (PlayerUtils.IsGroupTarget(args[0]))
-        {
-            Reply(context, "sanction_group_targets_not_allowed");
-            return true;
-        }
-
-        return false;
-    }
-
-    private bool EnsureSinglePunishTarget(ICommandContext context, IReadOnlyCollection<IPlayer> targets, string rawTarget)
-    {
-        if (targets.Count <= 1)
-            return true;
-
-        ReplyRaw(context, $"Target '{rawTarget}' matched multiple players. Use `#userid` or full name.");
-        return false;
-    }
-
-    private readonly record struct PunishTargetSnapshot(int PlayerId, ulong SteamId, string Name, string? IpAddress);
 }
 
 

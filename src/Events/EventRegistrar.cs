@@ -159,7 +159,11 @@ public class EventRegistrar
 
         var steamId = player.SteamID;
 
-        var cachedGag = _gagManager.GetActiveGagFromCache(steamId);
+        // Gag durumu için TTL'siz snapshot (PlayerSanctionStateService) otoritedir.
+        // 30 sn'lik GagManager cache'i yalnızca snapshot henüz yüklenmemişse yedek olarak
+        // kullanılır. Önceki kod sadece 30 sn'lik cache'e baktığı için cache düştüğünde
+        // gaglı oyuncu mesaj yazabiliyordu (cache miss = engellenmeyen mesaj).
+        var cachedGag = _sanctionStateService.GetCachedGag(steamId) ?? _gagManager.GetActiveGagFromCache(steamId);
         if (cachedGag != null && cachedGag.IsActive)
         {
             bool shouldShowMessage = !_gagWarnTimestamps.ContainsKey(playerId) ||
@@ -195,10 +199,12 @@ public class EventRegistrar
             return HookResult.Stop;
         }
 
-        _ = Task.Run(async () =>
+        // Snapshot henüz yüklenmemişse (örn. bağlanmanın hemen ardından) otoriteyi doldur.
+        // Snapshot zaten varsa (gag olsun olmasın) gereksiz DB sorgusu yapılmaz.
+        if (_sanctionStateService.GetCachedState(steamId) == null)
         {
-            var loadedGag = await _gagManager.GetActiveGagAsync(steamId);
-        });
+            _ = _sanctionStateService.RefreshAsync(steamId, player.IPAddress);
+        }
 
 
         if (_chatTagConfigManager.Config.ChatEnabled && !string.IsNullOrWhiteSpace(text))

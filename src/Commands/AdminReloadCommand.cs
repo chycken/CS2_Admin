@@ -43,20 +43,13 @@ public class AdminReloadCommand : CommandBase
                 ReloadPermissionsConfig();
                 var onlineCount = await ReloadAdminsAndTagsAsync();
 
-                Core.Scheduler.NextTick(() =>
-                {
-                    Reply(context, "adminreload_success");
-                });
-
+                await OnMainThreadAsync(() => Reply(context, "adminreload_success"));
                 await AdminLogManager.AddLogAsync("adminreload", adminName, adminSteamId, null, null, $"online={onlineCount}");
             }
             catch (Exception ex)
             {
                 Core.Logger.LogErrorIfEnabled("[CS2_Admin] adminreload failed: {Message}", ex.Message);
-                Core.Scheduler.NextTick(() =>
-                {
-                    Reply(context, "adminreload_failed");
-                });
+                await OnMainThreadAsync(() => Reply(context, "adminreload_failed"));
             }
         }
         catch (Exception ex)

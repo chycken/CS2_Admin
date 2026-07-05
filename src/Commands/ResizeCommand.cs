@@ -30,75 +30,51 @@ public class ResizeCommand : CommandBase
         _adminDbManager = adminDbManager;
     }
 
-    public override async void Execute(ICommandContext context)
+    public override void Execute(ICommandContext context)
     {
-        try
-        {
-            var args = NormalizeArgs(context.Args, CommandsConfig.Resize);
-
-            if (!HasPerm(context, Permissions.Resize))
+        RunTargetedFunCommand(context, CommandsConfig.Resize, Permissions.Resize, "resize_usage", _adminDbManager, "Resize",
+            includeDeadPlayers: true,
+            minArgs: 2,
+            onMainThread: (ctx, args, targets, adminName) =>
             {
-                Reply(context, "no_permission");
-                return;
-            }
+                if (!float.TryParse(args[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var scale))
+                {
+                    Reply(ctx, "resize_usage");
+                    return;
+                }
 
-            if (args.Length < 2 || !float.TryParse(args[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var scale))
-            {
-                Reply(context, "resize_usage");
-                return;
-            }
+                scale = Math.Clamp(scale, 0.2f, 3.0f);
 
-            scale = Math.Clamp(scale, 0.2f, 3.0f);
+                var applied = 0;
+                foreach (var target in targets)
+                {
+                    if (TrySetPlayerScale(target, scale))
+                        applied++;
+                }
 
-            var targets = PlayerUtils.FindPlayersByTarget(Core, args[0], includeDeadPlayers: true, caller: context.Sender);
-            if (targets.Count == 0)
-            {
-                Reply(context, "no_valid_targets");
-                return;
-            }
+                if (applied == 0)
+                {
+                    Reply(ctx, "resize_not_supported");
+                    return;
+                }
 
-            targets = await PlayerUtils.FilterTargetsByAccessAsync(Core, _adminDbManager, context, targets, allowSelf: true);
-            if (targets.Count == 0)
-            {
-                Reply(context, "no_valid_targets");
-                return;
-            }
+                string targetLabel = FormatTargetName(targets);
+                var scaleStr = scale.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
 
-            var applied = 0;
-            foreach (var target in targets)
-            {
-                if (TrySetPlayerScale(target, scale))
-                    applied++;
-            }
+                foreach (var rTarget in targets)
+                {
+                    var liveR = Core.PlayerManager.GetAllPlayers().FirstOrDefault(p => p.IsValid && p.SteamID == rTarget.SteamID);
+                    if (liveR?.IsValid != true) continue;
+                    PlayerUtils.SendNotification(Core, liveR, Messages,
+                        $"<font color='#9b59b6'><b>{L("resize_personal_html")}</b></font><br><br>{L("label_value")}: <font color='#ffd700'>{scaleStr}x</font><br>{L("label_by")}: <font color='#ffd700'>{ResolveVisibleAdminName(liveR, adminName)}</font>",
+                        $" \x02{L("prefix")}\x01 {L("resize_personal_chat", ResolveVisibleAdminName(liveR, adminName), scaleStr)}");
+                }
 
-            if (applied == 0)
-            {
-                Reply(context, "resize_not_supported");
-                return;
-            }
+                BroadcastNotification(adminName, "resize_notification", targetLabel, scaleStr);
 
-            string targetLabel = FormatTargetName(targets);
-            var adminName = context.Sender?.Controller.PlayerName ?? L("console_name");
-            var scaleStr = scale.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
-
-            foreach (var rTarget in targets)
-            {
-                var liveR = Core.PlayerManager.GetAllPlayers().FirstOrDefault(p => p.IsValid && p.SteamID == rTarget.SteamID);
-                if (liveR?.IsValid != true) continue;
-                PlayerUtils.SendNotification(liveR, Messages,
-                    $"<font color='#9b59b6'><b>{L("resize_personal_html")}</b></font><br><br>{L("label_value")}: <font color='#ffd700'>{scaleStr}x</font><br>{L("label_by")}: <font color='#ffd700'>{ResolveVisibleAdminName(liveR, adminName)}</font>",
-                    $" \x02{L("prefix")}\x01 {L("resize_personal_chat", ResolveVisibleAdminName(liveR, adminName), scaleStr)}");
-            }
-
-            BroadcastNotification(adminName, "resize_notification", targetLabel, scaleStr);
-
-            _ = AdminLogManager.AddLogAsync("resize", adminName, context.Sender?.SteamID ?? 0, null, null, $"targets={applied};scale={scaleStr}");
-            Core.Logger.LogInformationIfEnabled("[CS2_Admin] {Admin} resized {Count} player(s) to {Scale}", adminName, applied, scale);
-        }
-        catch (Exception ex)
-        {
-            Core.Logger.LogErrorIfEnabled(ex, "[CS2_Admin] Resize command failed");
-        }
+                _ = AdminLogManager.AddLogAsync("resize", adminName, ctx.Sender?.SteamID ?? 0, null, null, $"targets={applied};scale={scaleStr}");
+                Core.Logger.LogInformationIfEnabled("[CS2_Admin] {Admin} resized {Count} player(s) to {Scale}", adminName, applied, scale);
+            });
     }
 
     private bool TrySetPlayerScale(IPlayer player, float scale)

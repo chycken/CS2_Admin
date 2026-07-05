@@ -99,7 +99,7 @@ public class ReportCommand : CommandBase
             var option = new ButtonMenuOption(optionText) { CloseAfterClick = true };
             option.Click += (_, args) =>
             {
-                Core.Scheduler.NextTick(() => OpenReportReasonMenu(args.Player, snapshot));
+                OpenReportReasonMenu(args.Player, snapshot);
                 return ValueTask.CompletedTask;
             };
             builder.AddOption(option);
@@ -167,10 +167,8 @@ public class ReportCommand : CommandBase
             $"target={target.Name};reason={reason};server={serverId};source=menu",
             target.Name);
 
-        Core.Scheduler.NextTick(() =>
-        {
-            reporter.SendChat($" \x02{L("prefix")}\x01 {L("report_sent")}");
-        });
+        // Menü click + await sonrası thread pool'dayız; SendChat main thread ister.
+        Core.Scheduler.NextTick(() => reporter.SendChat($" \x02{L("prefix")}\x01 {L("report_sent")}"));
     }
 
     private readonly record struct ReportTarget(ulong SteamId, string Name);

@@ -79,20 +79,41 @@ public class PlayerManagementHandler : IAdminMenuHandler
         var builder = _core.MenusAPI.CreateBuilder();
         builder.Design.SetMenuTitle(T("menu_warn_filter"));
 
-        builder.AddOption(new SubmenuMenuOption(T("menu_warn_filter_all"), () => BuildWarnHistoryListMenu(target, WarnHistoryFilter.All)));
-        builder.AddOption(new SubmenuMenuOption(T("menu_warn_filter_active"), () => BuildWarnHistoryListMenu(target, WarnHistoryFilter.Active)));
-        builder.AddOption(new SubmenuMenuOption(T("menu_warn_filter_expired"), () => BuildWarnHistoryListMenu(target, WarnHistoryFilter.Expired)));
-        builder.AddOption(new SubmenuMenuOption(T("menu_warn_filter_removed"), () => BuildWarnHistoryListMenu(target, WarnHistoryFilter.Removed)));
+        // Warn geçmişi DB'den gelir; menü factory'sinde senkron bloklamak main thread'i
+        // dondurur. Veriyi arka planda çekip menüyü NextTick'te açıyoruz.
+        AddWarnHistoryFilterOption(builder, target, "menu_warn_filter_all", WarnHistoryFilter.All);
+        AddWarnHistoryFilterOption(builder, target, "menu_warn_filter_active", WarnHistoryFilter.Active);
+        AddWarnHistoryFilterOption(builder, target, "menu_warn_filter_expired", WarnHistoryFilter.Expired);
+        AddWarnHistoryFilterOption(builder, target, "menu_warn_filter_removed", WarnHistoryFilter.Removed);
 
         return builder.Build();
     }
 
-    private IMenuAPI BuildWarnHistoryListMenu(IPlayer target, WarnHistoryFilter filter)
+    private void AddWarnHistoryFilterOption(IMenuBuilderAPI builder, IPlayer target, string labelKey, WarnHistoryFilter filter)
+    {
+        var option = new ButtonMenuOption(T(labelKey)) { CloseAfterClick = false };
+        option.Click += (_, args) =>
+        {
+            var viewer = args.Player;
+            _ = Task.Run(async () =>
+            {
+                var warns = await _warnManager.GetWarnHistoryAsync(target.SteamID, filter, 20);
+                _core.Scheduler.NextTick(() =>
+                {
+                    if (viewer.IsValid)
+                        _core.MenusAPI.OpenMenuForPlayer(viewer, BuildWarnHistoryListMenu(target, warns));
+                });
+            });
+            return ValueTask.CompletedTask;
+        };
+        builder.AddOption(option);
+    }
+
+    private IMenuAPI BuildWarnHistoryListMenu(IPlayer target, IReadOnlyList<Warn> warns)
     {
         var builder = _core.MenusAPI.CreateBuilder();
         builder.Design.SetMenuTitle(T("menu_warn_history_for", target.Controller.PlayerName ?? T("unknown")));
 
-        var warns = Task.Run(async () => await _warnManager.GetWarnHistoryAsync(target.SteamID, filter, 20)).GetAwaiter().GetResult();
         if (warns.Count == 0)
         {
             var empty = new ButtonMenuOption(T("warn_history_empty")) { CloseAfterClick = true };
@@ -112,7 +133,7 @@ public class PlayerManagementHandler : IAdminMenuHandler
             };
 
             var created = warn.CreatedAt.ToString("yyyy-MM-dd HH:mm");
-            var text = "$created | $status | $((Truncate(warn.Reason, 28)))";
+            var text = $"{created} | {status} | {Truncate(warn.Reason, 28)}";
             var option = new ButtonMenuOption(text) { CloseAfterClick = true };
             option.Click += (_, _) => ValueTask.CompletedTask;
             builder.AddOption(option);
@@ -292,13 +313,15 @@ public class PlayerManagementHandler : IAdminMenuHandler
         var duration = minutes <= 0 ? -1 : minutes;
         var targetId = target.PlayerID;
 
+        // Kanonik komut adını kullan (RegisterCommands'taki sabit adlar). Config alias'ı/FirstOrDefault
+        // değil; çünkü konsol komutu olarak sadece "sw_<kanonik>" kayıtlıdır.
         string? cmdName = action switch
         {
-            "ban" => _config.Commands.Ban.FirstOrDefault(),
-            "warn" => _config.Commands.Warn.FirstOrDefault(),
-            "mute" => _config.Commands.Mute.FirstOrDefault(),
-            "gag" => _config.Commands.Gag.FirstOrDefault(),
-            "silence" => _config.Commands.Silence.FirstOrDefault(),
+            "ban" => "ban",
+            "warn" => "warn",
+            "mute" => "mute",
+            "gag" => "gag",
+            "silence" => "silence",
             _ => null
         };
 

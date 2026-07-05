@@ -38,8 +38,12 @@ public class VoteCommand : CommandBase
     {
     }
 
-    public override async void Execute(ICommandContext context)
+
+
+    public override void Execute(ICommandContext context)
     {
+        
+
         try
         {
             var args = NormalizeArgs(context.Args, CommandsConfig.Vote);
@@ -98,7 +102,7 @@ public class VoteCommand : CommandBase
 
             var menu = BuildVoteMenu(vote);
             vote.Menu = menu;
-            foreach (var player in Core.PlayerManager.GetAllPlayers().Where(p => p.IsValid && !p.IsFakeClient))
+            foreach (var player in Core.PlayerManager.GetAllPlayers())
             {
                 Core.MenusAPI.OpenMenuForPlayer(player, menu);
                 player.SendChat($" \x02{L("prefix")}\x01 {L("vote_started", question)}");
@@ -139,6 +143,7 @@ public class VoteCommand : CommandBase
                     _activeVote.VotesBySteamId[player.SteamID] = answerIndex;
                 }
 
+                // Menü click handler'ı thread pool'da çalışır; SendChat main thread ister.
                 Core.Scheduler.NextTick(() =>
                 {
                     var live = Core.PlayerManager.GetPlayer(playerId);
@@ -188,19 +193,16 @@ public class VoteCommand : CommandBase
         }
 
         var totalVotes = vote.VotesBySteamId.Count;
-        Core.Scheduler.NextTick(() =>
+        foreach (var player in Core.PlayerManager.GetAllPlayers().Where(p => p.IsValid))
         {
-            foreach (var player in Core.PlayerManager.GetAllPlayers().Where(p => p.IsValid))
+            player.SendChat($" \x02{L("prefix")}\x01 {L("vote_result_header", vote.Question, totalVotes)}");
+            for (var i = 0; i < vote.Answers.Count; i++)
             {
-                player.SendChat($" \x02{L("prefix")}\x01 {L("vote_result_header", vote.Question, totalVotes)}");
-                for (var i = 0; i < vote.Answers.Count; i++)
-                {
-                    player.SendChat($" \x02{L("prefix")}\x01 {L("vote_result_line", i + 1, vote.Answers[i], counts[i])}");
-                }
-
-                player.SendChat($" \x02{L("prefix")}\x01 {L("vote_result_winner", vote.Answers[winnerIndex], counts[winnerIndex])}");
+                player.SendChat($" \x02{L("prefix")}\x01 {L("vote_result_line", i + 1, vote.Answers[i], counts[i])}");
             }
-        });
+
+            player.SendChat($" \x02{L("prefix")}\x01 {L("vote_result_winner", vote.Answers[winnerIndex], counts[winnerIndex])}");
+        }
 
         _ = AdminLogManager.AddLogAsync("vote_result", vote.StartedBy, vote.StartedBySteamId, null, null, $"question={vote.Question};winner={vote.Answers[winnerIndex]};votes={counts[winnerIndex]};total={totalVotes}");
     }
@@ -220,7 +222,7 @@ public class VoteCommand : CommandBase
                 return;
             }
 
-            foreach (var player in Core.PlayerManager.GetAllPlayers().Where(p => p.IsValid && !p.IsFakeClient))
+            foreach (var player in Core.PlayerManager.GetAllPlayers())
             {
                 if (vote.VotesBySteamId.ContainsKey(player.SteamID))
                 {

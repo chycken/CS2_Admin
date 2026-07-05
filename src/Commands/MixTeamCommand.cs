@@ -68,13 +68,10 @@ public class MixTeamCommand : CommandBase
                     ? (startT ? Team.T : Team.CT)
                     : (startT ? Team.CT : Team.T);
 
-                Core.Scheduler.NextTick(() =>
-                {
                     if (target.IsValid)
                     {
                         target.ChangeTeam(team);
                     }
-                });
                 moved++;
             }
 

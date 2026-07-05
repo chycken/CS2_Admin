@@ -426,16 +426,24 @@ public static class PlayerUtils
 
     /// <summary>
     /// Sends a notification message to a player, using CenterHTML if enabled in config, otherwise chat.
+    /// SwiftlyS2'nin SendCenterHTML/SendChat native çağrıları yalnızca ana thread'den yapılabilir.
+    /// Bu metot neredeyse her zaman bir DB await'inden (arka plan thread'i) sonra çağrıldığı için
+    /// Core.Scheduler.NextTick ile ana thread'e marshal edilir; aksi halde "This method can only
+    /// be called from the main thread" istisnası fırlar ve async void Execute içinde yakalanamadığı
+    /// için tüm sunucu çöker.
     /// </summary>
-    public static void SendNotification(IPlayer player, MessagesConfig config, string htmlMessage, string chatMessage)
+    public static void SendNotification(ISwiftlyCore core, IPlayer player, MessagesConfig config, string htmlMessage, string chatMessage)
     {
-        if (config.EnableCenterHtmlMessages)
+        core.Scheduler.NextTick(() =>
         {
-            player.SendCenterHTML(htmlMessage, config.CenterHtmlDurationMs);
-        }
-        else
-        {
-            player.SendChat(chatMessage);
-        }
+            if (config.EnableCenterHtmlMessages)
+            {
+                player.SendCenterHTML(htmlMessage, config.CenterHtmlDurationMs);
+            }
+            else
+            {
+                player.SendChat(chatMessage);
+            }
+        });
     }
 }

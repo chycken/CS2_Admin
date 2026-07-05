@@ -9,21 +9,8 @@ using SwiftlyS2.Shared.Players;
 
 namespace CS2_Admin.Commands;
 
-public class LastBanCommand : CommandBase
+public class LastBanCommand : BanCommandBase
 {
-    private readonly BanManager _banManager;
-    private readonly MuteManager _muteManager;
-    private readonly GagManager _gagManager;
-    private readonly WarnManager _warnManager;
-    private readonly AdminDbManager _adminDbManager;
-    private readonly PlayerIpDbManager _playerIpDbManager;
-    private readonly PlayerSessionManager _playerSessionManager;
-    private readonly RecentPlayersTracker _recentPlayersTracker;
-    private readonly DiscordBotService _discord;
-    private readonly SanctionMenuConfig _sanctions;
-    private readonly MultiServerConfig _multiServerConfig;
-    private readonly int _banType;
-    private readonly PlayerSanctionStateService _sanctionStateService;
     private readonly IReadOnlyList<string> _lastBanAliases;
 
     public LastBanCommand(
@@ -48,21 +35,10 @@ public class LastBanCommand : CommandBase
         PlayerSanctionStateService sanctionStateService,
         PermissionService permissionService,
         IReadOnlyList<string> lastBanAliases)
-        : base(core, permissions, commands, tags, messages, adminLogManager, permissionService)
+        : base(core, banManager, muteManager, gagManager, warnManager, adminDbManager, adminLogManager,
+            playerIpDbManager, playerSessionManager, recentPlayersTracker, discord, permissions, commands,
+            tags, messages, sanctions, multiServerConfig, banType, sanctionStateService, permissionService)
     {
-        _banManager = banManager;
-        _muteManager = muteManager;
-        _gagManager = gagManager;
-        _warnManager = warnManager;
-        _adminDbManager = adminDbManager;
-        _playerIpDbManager = playerIpDbManager;
-        _playerSessionManager = playerSessionManager;
-        _recentPlayersTracker = recentPlayersTracker;
-        _discord = discord;
-        _sanctions = sanctions;
-        _multiServerConfig = multiServerConfig;
-        _banType = banType is >= 1 and <= 3 ? banType : 1;
-        _sanctionStateService = sanctionStateService;
         _lastBanAliases = lastBanAliases;
     }
 
@@ -84,7 +60,7 @@ public class LastBanCommand : CommandBase
             }
 
             var fallbackRecent = await _playerSessionManager.GetRecentDisconnectedPlayersAsync();
-            Core.Scheduler.NextTick(() => ShowLastBanTargets(context, fallbackRecent));
+            ShowLastBanTargets(context, fallbackRecent);
         }
         catch (Exception ex)
         {
@@ -194,7 +170,7 @@ public class LastBanCommand : CommandBase
             var btn = new ButtonMenuOption(item.Name) { CloseAfterClick = true };
             btn.Click += (_, _) =>
             {
-                Core.Scheduler.NextTick(() => OpenLastReasonMenu(admin, target, action, item.Minutes));
+                OpenLastReasonMenu(admin, target, action, item.Minutes);
                 return ValueTask.CompletedTask;
             };
             builder.AddOption(btn);
@@ -246,7 +222,7 @@ public class LastBanCommand : CommandBase
                 var existing = await _banManager.GetActiveBanFreshAsync(target.SteamId, target.IpAddress, _multiServerConfig.Enabled);
                 if (existing != null)
                 {
-                    Core.Scheduler.NextTick(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("steamid_already_banned", target.SteamId)}"));
+                    await OnMainThreadAsync(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("steamid_already_banned", target.SteamId)}"));
                     return;
                 }
 
@@ -254,27 +230,27 @@ public class LastBanCommand : CommandBase
                 var ok = await _banManager.AddBanAsync(target.SteamId, target.Name, duration, reason, isGlobal, target.IpAddress);
                 if (!ok)
                 {
-                    Core.Scheduler.NextTick(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("lastban_action_failed", L("menu_ban"))}"));
+                    await OnMainThreadAsync(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("lastban_action_failed", L("menu_ban"))}"));
                     return;
                 }
 
                 await AdminLogManager.AddLogAsync("lastban_ban", adminName, adminSteamId, target.SteamId, target.IpAddress, $"duration={duration};global={isGlobal};reason={reason}", target.Name);
                 await _sanctionStateService.RefreshAsync(target.SteamId, target.IpAddress);
-                Core.Scheduler.NextTick(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("lastban_action_applied", L("menu_ban"), target.Name)}"));
+                await OnMainThreadAsync(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("lastban_action_applied", L("menu_ban"), target.Name)}"));
                 return;
             }
             case LastSanctionAction.IpBan:
             {
                 if (string.IsNullOrWhiteSpace(target.IpAddress))
                 {
-                    Core.Scheduler.NextTick(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("lastban_no_ip")}"));
+                    await OnMainThreadAsync(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("lastban_no_ip")}"));
                     return;
                 }
 
                 var existing = await _banManager.GetActiveBanFreshAsync(0, target.IpAddress, _multiServerConfig.Enabled);
                 if (existing != null)
                 {
-                    Core.Scheduler.NextTick(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("lastban_ip_already_banned", target.IpAddress)}"));
+                    await OnMainThreadAsync(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("lastban_ip_already_banned", target.IpAddress)}"));
                     return;
                 }
 
@@ -282,13 +258,13 @@ public class LastBanCommand : CommandBase
                 var ok = await _banManager.AddIpBanAsync(target.IpAddress, target.Name, duration, reason, isGlobal, target.SteamId);
                 if (!ok)
                 {
-                    Core.Scheduler.NextTick(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("lastban_action_failed", L("menu_ipban"))}"));
+                    await OnMainThreadAsync(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("lastban_action_failed", L("menu_ipban"))}"));
                     return;
                 }
 
                 await AdminLogManager.AddLogAsync("lastban_ipban", adminName, adminSteamId, target.SteamId, target.IpAddress, $"duration={duration};global={isGlobal};reason={reason}", target.Name);
                 await _sanctionStateService.RefreshAsync(target.SteamId, target.IpAddress);
-                Core.Scheduler.NextTick(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("lastban_action_applied", L("menu_ipban"), target.Name)}"));
+                await OnMainThreadAsync(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("lastban_action_applied", L("menu_ipban"), target.Name)}"));
                 return;
             }
             case LastSanctionAction.Warn:
@@ -297,13 +273,13 @@ public class LastBanCommand : CommandBase
                 var ok = await _warnManager.AddWarnAsync(target.SteamId, duration, reason);
                 if (!ok)
                 {
-                    Core.Scheduler.NextTick(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("lastban_action_failed", L("menu_warn"))}"));
+                    await OnMainThreadAsync(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("lastban_action_failed", L("menu_warn"))}"));
                     return;
                 }
 
                 await AdminLogManager.AddLogAsync("lastban_warn", adminName, adminSteamId, target.SteamId, target.IpAddress, $"duration={duration};reason={reason}", target.Name);
                 await _sanctionStateService.RefreshAsync(target.SteamId, target.IpAddress);
-                Core.Scheduler.NextTick(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("lastban_action_applied", L("menu_warn"), target.Name)}"));
+                await OnMainThreadAsync(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("lastban_action_applied", L("menu_warn"), target.Name)}"));
                 return;
             }
             case LastSanctionAction.Mute:
@@ -311,7 +287,7 @@ public class LastBanCommand : CommandBase
                 var existing = await _muteManager.GetActiveMuteFreshAsync(target.SteamId);
                 if (existing != null)
                 {
-                    Core.Scheduler.NextTick(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("player_already_muted", target.Name)}"));
+                    await OnMainThreadAsync(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("player_already_muted", target.Name)}"));
                     return;
                 }
 
@@ -319,13 +295,13 @@ public class LastBanCommand : CommandBase
                 var ok = await _muteManager.AddMuteAsync(target.SteamId, duration, reason);
                 if (!ok)
                 {
-                    Core.Scheduler.NextTick(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("lastban_action_failed", L("menu_mute"))}"));
+                    await OnMainThreadAsync(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("lastban_action_failed", L("menu_mute"))}"));
                     return;
                 }
 
                 await AdminLogManager.AddLogAsync("lastban_mute", adminName, adminSteamId, target.SteamId, target.IpAddress, $"duration={duration};reason={reason}", target.Name);
                 await _sanctionStateService.RefreshAsync(target.SteamId, target.IpAddress);
-                Core.Scheduler.NextTick(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("lastban_action_applied", L("menu_mute"), target.Name)}"));
+                await OnMainThreadAsync(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("lastban_action_applied", L("menu_mute"), target.Name)}"));
                 return;
             }
             case LastSanctionAction.Gag:
@@ -333,7 +309,7 @@ public class LastBanCommand : CommandBase
                 var existing = await _gagManager.GetActiveGagFreshAsync(target.SteamId);
                 if (existing != null)
                 {
-                    Core.Scheduler.NextTick(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("player_already_gagged", target.Name)}"));
+                    await OnMainThreadAsync(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("player_already_gagged", target.Name)}"));
                     return;
                 }
 
@@ -341,13 +317,13 @@ public class LastBanCommand : CommandBase
                 var ok = await _gagManager.AddGagAsync(target.SteamId, duration, reason);
                 if (!ok)
                 {
-                    Core.Scheduler.NextTick(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("lastban_action_failed", L("menu_gag"))}"));
+                    await OnMainThreadAsync(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("lastban_action_failed", L("menu_gag"))}"));
                     return;
                 }
 
                 await AdminLogManager.AddLogAsync("lastban_gag", adminName, adminSteamId, target.SteamId, target.IpAddress, $"duration={duration};reason={reason}", target.Name);
                 await _sanctionStateService.RefreshAsync(target.SteamId, target.IpAddress);
-                Core.Scheduler.NextTick(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("lastban_action_applied", L("menu_gag"), target.Name)}"));
+                await OnMainThreadAsync(() => admin.SendChat($" \x02{L("prefix")}\x01 {L("lastban_action_applied", L("menu_gag"), target.Name)}"));
                 return;
             }
             default:
@@ -358,31 +334,6 @@ public class LastBanCommand : CommandBase
     private async Task<bool> ValidateCanPunishLastTargetAsync(IPlayer admin, RecentPlayerInfo target)
     {
         return await PlayerUtils.CanAdminTargetAsync(Core, _adminDbManager, admin, target.SteamId);
-    }
-
-    private bool ResolveGlobalMode()
-    {
-        if (!_multiServerConfig.Enabled)
-        {
-            return false;
-        }
-
-        return _multiServerConfig.GlobalBansByDefault;
-    }
-
-    private string T(string key, string fallback, params object[] args)
-    {
-        try
-        {
-            var value = args.Length == 0 ? L(key) : L(key, args);
-            return string.Equals(value, key, StringComparison.OrdinalIgnoreCase)
-                ? (args.Length == 0 ? fallback : string.Format(fallback, args))
-                : value;
-        }
-        catch
-        {
-            return args.Length == 0 ? fallback : string.Format(fallback, args);
-        }
     }
 
     private enum LastSanctionAction

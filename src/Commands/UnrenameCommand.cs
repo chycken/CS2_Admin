@@ -65,24 +65,33 @@ public class UnrenameCommand : CommandBase
             var originalName = await _playerNameHistoryManager.GetOriginalNameAsync(target.SteamID);
             if (string.IsNullOrWhiteSpace(originalName))
             {
-                ReplyRaw(context, L("unrename_no_history"));
+                // await sonrası thread pool'dayız; ReplyRaw main thread ister.
+                Core.Scheduler.NextTick(() => ReplyRaw(context, L("unrename_no_history")));
                 return;
             }
 
-            target.Controller.PlayerName = originalName;
             await _playerNameHistoryManager.DeleteCustomNameAsync(target.SteamID);
 
+            // await sonrası ana thread'de değiliz; Controller.PlayerName ataması gibi native
+            // çağrılar SADECE ana thread'den yapılabilir. Ayrıca oyuncu bu iki await arasında
+            // ayrılmış olabileceğinden canlı referansı yeniden alıp IsValid kontrolü yapıyoruz.
             Core.Scheduler.NextTick(() =>
             {
+                var liveTarget = Core.PlayerManager.GetAllPlayers().FirstOrDefault(p => p.IsValid && p.SteamID == target.SteamID);
+                if (liveTarget?.IsValid != true) return;
+
+                liveTarget.Controller.PlayerName = originalName;
+                liveTarget.Controller.PlayerNameUpdated();
+
                 BroadcastNotification(adminName, "unrename_notification", targetName, originalName);
 
-                PlayerUtils.SendNotification(target, Messages,
-                    $"<font color='#00ff00'><b>{L("unrename_personal_html")}</b></font><br><br>{L("label_original_name")}: <font color='#00ff00'>{originalName}</font><br>{L("label_by")}: <font color='#ffcc00'>{ResolveVisibleAdminName(target, adminName)}</font>",
-                    $" \x02{L("prefix")}\x01 {L("unrename_personal_chat", originalName, ResolveVisibleAdminName(target, adminName))}");
-            });
+                PlayerUtils.SendNotification(Core, liveTarget, Messages,
+                    $"<font color='#00ff00'><b>{L("unrename_personal_html")}</b></font><br><br>{L("label_original_name")}: <font color='#00ff00'>{originalName}</font><br>{L("label_by")}: <font color='#ffcc00'>{ResolveVisibleAdminName(liveTarget, adminName)}</font>",
+                    $" \x02{L("prefix")}\x01 {L("unrename_personal_chat", originalName, ResolveVisibleAdminName(liveTarget, adminName))}");
 
-            _ = AdminLogManager.AddLogAsync("unrename", adminName, context.Sender?.SteamID ?? 0, target.SteamID, target.IPAddress, $"restored_name={originalName}", targetName);
-            Core.Logger.LogInformationIfEnabled("[CS2_Admin] {Admin} restored name of {Target} to {OriginalName}", adminName, targetName, originalName);
+                _ = AdminLogManager.AddLogAsync("unrename", adminName, context.Sender?.SteamID ?? 0, liveTarget.SteamID, liveTarget.IPAddress, $"restored_name={originalName}", targetName);
+                Core.Logger.LogInformationIfEnabled("[CS2_Admin] {Admin} restored name of {Target} to {OriginalName}", adminName, targetName, originalName);
+            });
         }
         catch (Exception ex)
         {

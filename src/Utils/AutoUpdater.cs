@@ -31,6 +31,11 @@ public static class AutoUpdater
         "chat_tags.json"
     };
 
+    private static readonly HashSet<string> SkippedDirectories = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "runtimes"
+    };
+
     private static readonly HttpClient HttpClient = new()
     {
         Timeout = TimeSpan.FromMinutes(1)
@@ -141,7 +146,7 @@ public static class AutoUpdater
         }
         catch (Exception ex)
         {
-            core.Logger.LogErrorIfEnabled(ex, "[CS2Admin] Failed to apply update");
+            core.Logger.LogErrorIfEnabled("[CS2Admin] Failed to apply update: {Message}", ex.Message);
         }
         finally
         {
@@ -176,6 +181,8 @@ public static class AutoUpdater
         foreach (var dir in Directory.GetDirectories(sourceDir))
         {
             var dirName = Path.GetFileName(dir);
+            if (SkippedDirectories.Contains(dirName))
+                continue;
             CopyDirectorySafe(dir, Path.Combine(targetDir, dirName));
         }
     }

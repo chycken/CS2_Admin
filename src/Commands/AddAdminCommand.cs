@@ -66,7 +66,7 @@ public class AddAdminCommand : CommandBase
                 var group = await GroupDbManager.GetGroupAsync(groupName.Trim().TrimStart('#', '@'));
                 if (group == null)
                 {
-                    Core.Scheduler.NextTick(() => Reply(context, "addadmin_group_not_found", groupName));
+                    await OnMainThreadAsync(() => Reply(context, "addadmin_group_not_found", groupName));
                     return;
                 }
                 maxGroupImmunity = Math.Max(maxGroupImmunity, group.Immunity);
@@ -76,17 +76,16 @@ public class AddAdminCommand : CommandBase
             var success = await AdminDbManager.AddAdminAsync(targetSteamId, name, string.Empty, resolvedImmunity, groups, adminName, adminSteamId, durationDays);
             if (!success)
             {
-                Core.Scheduler.NextTick(() => Reply(context, "addadmin_failed"));
+                await OnMainThreadAsync(() => Reply(context, "addadmin_failed"));
                 return;
             }
 
             var effectiveFlags = await AdminDbManager.GetEffectiveFlagsAsync(targetSteamId);
-            Core.Scheduler.NextTick(() =>
+            await OnMainThreadAsync(() =>
             {
                 Reply(context, "addadmin_success", name, targetSteamId, string.Join(",", effectiveFlags));
+                NotifyOnlinePlayer(targetSteamId, L("addadmin_granted"));
             });
-
-            NotifyOnlinePlayer(targetSteamId, L("addadmin_granted"));
             await TryAutoReloadAsync();
             await ApplyTagToOnlinePlayerAsync(targetSteamId);
             await AdminLogManager.AddLogAsync("addadmin", adminName, adminSteamId, targetSteamId, null, $"groups={groups};immunity={resolvedImmunity};duration_days={durationDays?.ToString() ?? "0"}", name);
@@ -102,14 +101,11 @@ public class AddAdminCommand : CommandBase
         if (string.IsNullOrWhiteSpace(message))
             return;
 
-        Core.Scheduler.NextTick(() =>
-        {
             var player = Core.PlayerManager.GetAllPlayers().FirstOrDefault(p => p.IsValid && p.SteamID == steamId);
             if (player != null)
             {
                 player.SendChat($" \x02{L("prefix")}\x01 {message}");
             }
-        });
     }
 
     private async Task ApplyTagToOnlinePlayerAsync(ulong steamId)

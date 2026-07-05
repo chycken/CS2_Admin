@@ -123,6 +123,7 @@ public class ChatTagGroupStyle
     public string ChatColor { get; set; } = "";
     public string TagColor { get; set; } = "";
     public string NameColor { get; set; } = "";
+    public string TagText { get; set; } = "";
 }
 
 public class AdminPlaytimeConfig
@@ -166,10 +167,7 @@ public class DiscordFileConfig
     public string ReportChannelId { get; set; } = "";
     public string AdminTimeChannelId { get; set; } = "";
     public string ServerStatusChannelId { get; set; } = "";
-    public string LeaderboardChannelId { get; set; } = "";
     public int ServerStatusUpdateSeconds { get; set; } = 30;
-    public int LeaderboardUpdateMinutes { get; set; } = 10;
-    public int LeaderboardTopLimit { get; set; } = 10;
 }
 
 public class AfkFileConfig

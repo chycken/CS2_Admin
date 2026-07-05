@@ -29,8 +29,12 @@ public class MapCommand : CommandBase
         _workshopMaps = workshopMaps;
     }
 
-    public override async void Execute(ICommandContext context)
+
+
+    public override void Execute(ICommandContext context)
     {
+        
+
         try
         {
             var args = NormalizeArgs(context.Args, CommandsConfig.ChangeMap);

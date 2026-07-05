@@ -48,7 +48,7 @@ public class AdminTimeSendCommand : CommandBase
             var topAdmins = await _adminPlaytimeDbManager.GetTopAdminsAsync(_adminPlaytimeConfig.DiscordTopLimit);
             if (topAdmins.Count == 0)
             {
-                Core.Scheduler.NextTick(() => Reply(context, "admintime_no_data"));
+                await OnMainThreadAsync(() => Reply(context, "admintime_no_data"));
                 return;
             }
 
@@ -56,7 +56,7 @@ public class AdminTimeSendCommand : CommandBase
             await _adminPlaytimeDbManager.ResetAllAsync();
             await AdminLogManager.AddLogAsync("admintimesend", adminName, adminSteamId, null, null, $"count={topAdmins.Count}");
 
-            Core.Scheduler.NextTick(() => Reply(context, "admintime_sent"));
+            await OnMainThreadAsync(() => Reply(context, "admintime_sent"));
             Core.Logger.LogInformationIfEnabled("[CS2_Admin] Admin playtime top list sent to Discord by {Admin} and playtime counters reset", adminName);
         }
         catch (Exception ex)

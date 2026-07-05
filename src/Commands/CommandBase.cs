@@ -92,7 +92,33 @@ public abstract class CommandBase : ICommand
 
     protected void Reply(ICommandContext context, string key)
     {
+        // "*_usage" anahtarları artık SADECE argüman ipucunu içerir (örn. "<hedef> [hasar]").
+        // Komut adı ve prefix ('!' / '/') kullanıcının yazdığından (context) alınır; böylece
+        // config'ten alias değiştirilse bile usage mesajı doğru kalır ve çevirilerde komut adı
+        // sabit kodlanmaz.
+        if (key.EndsWith("_usage", StringComparison.Ordinal))
+        {
+            SendReply(context, BuildUsage(context, key));
+            return;
+        }
+
         SendReply(context, L(key));
+    }
+
+    private string BuildUsage(ICommandContext context, string argsKey)
+    {
+        var prefix = string.IsNullOrEmpty(context.Prefix) ? "!" : context.Prefix;
+        var cmd = string.IsNullOrWhiteSpace(context.CommandName) ? string.Empty : context.CommandName;
+        var label = L("usage_label");
+
+        var args = L(argsKey);
+        // Anahtar bulunamazsa localizer anahtarın kendisini döndürür; bu durumda argümansız say.
+        if (string.Equals(args, argsKey, StringComparison.Ordinal))
+            args = string.Empty;
+
+        return string.IsNullOrWhiteSpace(args)
+            ? $"{label}: {prefix}{cmd}"
+            : $"{label}: {prefix}{cmd} {args}";
     }
 
     protected void Reply(ICommandContext context, string key, params object[] args)
@@ -110,15 +136,25 @@ public abstract class CommandBase : ICommand
         var prefix = L("prefix");
         var formatted = $" \x02{prefix}\x01 {message}";
 
-        if (context.IsSentByPlayer && context.Sender != null)
+        // SwiftlyS2'nin oyuncu/native API'leri (SendChat, SendMessage...) YALNIZCA ana thread'den
+        // çağrılabilir. Komutlar (Execute) genelde bir DB await'inden (Task.Run tabanlı) sonra bu
+        // metodu çağırıyor; o noktada kod ARTIK ana thread'de değildir. Ana thread'e marshal
+        // etmezsek "This method can only be called from the main thread" istisnası fırlar ve bu,
+        // async void Execute içinde yakalanamadığı için tüm sunucuyu çökertir (SIGSEGV/abort).
+        // Core.Scheduler.NextTick her zaman ana thread'de çalışır; bu yüzden burada ve aşağıdaki
+        // Broadcast/BroadcastNotification'da TÜM native/oyuncu dokunuşları buna sarılır.
+        Core.Scheduler.NextTick(() =>
         {
-            context.Sender.SendChat(formatted);
-            return;
-        }
+            if (context.IsSentByPlayer && context.Sender != null)
+            {
+                context.Sender.SendChat(formatted);
+                return;
+            }
 
-        var stripped = StripChatFormatting(message);
-        Core.Logger.LogInformation("[{Prefix}] {Message}", prefix, stripped);
-        Console.WriteLine($"[{prefix}] {stripped}");
+            var stripped = StripChatFormatting(message);
+            Core.Logger.LogInformation("[{Prefix}] {Message}", prefix, stripped);
+            Console.WriteLine($"[{prefix}] {stripped}");
+        });
     }
 
     private static string StripChatFormatting(string message)
@@ -133,23 +169,29 @@ public abstract class CommandBase : ICommand
 
     protected void Broadcast(string message)
     {
-        foreach (var p in Core.PlayerManager.GetAllPlayers().Where(p => p.IsValid))
+        Core.Scheduler.NextTick(() =>
         {
-            p.SendChat(message);
-        }
+            foreach (var p in Core.PlayerManager.GetAllPlayers().Where(p => p.IsValid))
+            {
+                p.SendChat(message);
+            }
+        });
     }
 
     protected void BroadcastNotification(string adminName, string key, params object[] args)
     {
-        foreach (var player in Core.PlayerManager.GetAllPlayers().Where(p => p.IsValid))
+        Core.Scheduler.NextTick(() =>
         {
-            var visibleAdmin = ResolveVisibleAdminName(player, adminName);
-            var finalArgs = new object[args.Length + 1];
-            finalArgs[0] = visibleAdmin;
-            Array.Copy(args, 0, finalArgs, 1, args.Length);
+            foreach (var player in Core.PlayerManager.GetAllPlayers().Where(p => p.IsValid))
+            {
+                var visibleAdmin = ResolveVisibleAdminName(player, adminName);
+                var finalArgs = new object[args.Length + 1];
+                finalArgs[0] = visibleAdmin;
+                Array.Copy(args, 0, finalArgs, 1, args.Length);
 
-            player.SendChat($" \x02{L("prefix")}\x01 {L(key, finalArgs)}");
-        }
+                player.SendChat($" \x02{L("prefix")}\x01 {L(key, finalArgs)}");
+            }
+        });
     }
 
     protected string ResolveVisibleAdminName(IPlayer viewer, string adminName)
@@ -173,6 +215,102 @@ public abstract class CommandBase : ICommand
     protected string[] NormalizeArgs(string[] args, IReadOnlyList<string> aliases)
     {
         return CommandAliasUtils.NormalizeCommandArgs(args, aliases);
+    }
+
+    protected Task OnMainThreadAsync(Action action) => Core.Scheduler.NextTickAsync(action);
+
+    /// <summary>
+    /// Hedefli fun/oyuncu komutlarının ortak iskeleti: alias temizle → yetki → hedef bul →
+    /// immunity süz (await) → kalan HER ŞEYİ main thread'de çalıştır.
+    ///
+    /// Bu şablonun asıl amacı thread güvenliğini yapısal garantiye almak: await sonrası
+    /// thread pool'dayız ve SendChat/pawn mutasyonu gibi native çağrılar orada sunucuyu
+    /// çökertir. Komutlar bu iskeleti kopyalarken NextTick'i unutabiliyordu; şablonda
+    /// onMainThread aksiyonu HER ZAMAN Core.Scheduler.NextTick içinde çağrılır.
+    /// </summary>
+    protected async void RunTargetedFunCommand(
+        ICommandContext context,
+        IReadOnlyList<string> aliases,
+        string permission,
+        string usageKey,
+        AdminDbManager adminDbManager,
+        string logLabel,
+        Action<ICommandContext, string[], List<IPlayer>, string> onMainThread,
+        bool includeDeadPlayers = true,
+        bool allowSelf = true,
+        int minArgs = 1,
+        Func<IPlayer, bool>? targetFilter = null,
+        string notFoundKey = "no_valid_targets")
+    {
+        try
+        {
+            var args = NormalizeArgs(context.Args, aliases);
+
+            if (!HasPerm(context, permission))
+            {
+                Reply(context, "no_permission");
+                return;
+            }
+
+            if (args.Length < minArgs)
+            {
+                Reply(context, usageKey);
+                return;
+            }
+
+            var targets = PlayerUtils.FindPlayersByTarget(Core, args[0], includeDeadPlayers: includeDeadPlayers, caller: context.Sender);
+            if (targetFilter != null)
+                targets = targets.Where(targetFilter).ToList();
+
+            if (targets.Count == 0)
+            {
+                Reply(context, notFoundKey);
+                return;
+            }
+
+            targets = await PlayerUtils.FilterTargetsByAccessAsync(Core, adminDbManager, context, targets, allowSelf: allowSelf);
+            if (targets.Count == 0)
+            {
+                // await sonrası thread pool'dayız; Reply main thread ister.
+                Core.Scheduler.NextTick(() => Reply(context, notFoundKey));
+                return;
+            }
+
+            var adminName = context.Sender?.Controller.PlayerName ?? L("console_name");
+
+            Core.Scheduler.NextTick(() => onMainThread(context, args, targets, adminName));
+        }
+        catch (Exception ex)
+        {
+            Core.Logger.LogErrorIfEnabled(ex, "[CS2_Admin] {Command} command failed", logLabel);
+        }
+    }
+
+    // Sanction komutlarının (gag/mute/silence ve un- karşılıkları) ortak hedef doğrulama
+    // yardımcıları. Önceden her komutta kopyaydı; tek yerde tutuluyor.
+    protected readonly record struct PunishTargetSnapshot(int PlayerId, ulong SteamId, string Name, string? IpAddress);
+
+    protected bool RejectGroupTargets(ICommandContext context, string[] args)
+    {
+        if (args.Length == 0)
+            return false;
+
+        if (PlayerUtils.IsGroupTarget(args[0]))
+        {
+            Reply(context, "sanction_group_targets_not_allowed");
+            return true;
+        }
+
+        return false;
+    }
+
+    protected bool EnsureSinglePunishTarget(ICommandContext context, IReadOnlyCollection<IPlayer> targets, string rawTarget)
+    {
+        if (targets.Count <= 1)
+            return true;
+
+        ReplyRaw(context, $"Target '{rawTarget}' matched multiple players. Use `#userid` or full name.");
+        return false;
     }
 
     protected async Task TryAutoReloadAsync()
@@ -296,14 +434,8 @@ public abstract class CommandBase : ICommand
             }
         }
 
-        Core.Scheduler.NextTick(() =>
-        {
             if (!Tags.Enabled)
-                return;
-
-            foreach (var pair in resolvedTags)
-                PlayerUtils.SetScoreTagReliable(Core, pair.Key, pair.Value);
-        });
+                return 0;
 
         return onlinePlayers.Count;
     }

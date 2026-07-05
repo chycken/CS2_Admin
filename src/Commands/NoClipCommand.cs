@@ -74,7 +74,7 @@ public class NoClipCommand : CommandBase
             var senderIsTarget = context.Sender != null && context.Sender.SteamID == target.SteamID;
             if (!senderIsTarget)
             {
-                PlayerUtils.SendNotification(target, Messages,
+                PlayerUtils.SendNotification(Core, target, Messages,
                     $"<font color='#00ccff'><b>{L("noclip_toggled_personal_html", stateLabel)}</b></font><br><br>{L("label_by")}: <font color='#ffcc00'>{ResolveVisibleAdminName(target, adminName)}</font>",
                     $" \x02{L("prefix")}\x01 {L("noclip_toggled_personal_chat", stateLabel, ResolveVisibleAdminName(target, adminName))}");
             }

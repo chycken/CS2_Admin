@@ -59,29 +59,40 @@ public class TeamCommand : CommandBase
             var team = PlayerUtils.ParseTeam(args[1]);
             if (team == null)
             {
-                Reply(context, "invalid_team");
+                // await sonrası thread pool'dayız; Reply main thread ister.
+                Core.Scheduler.NextTick(() => Reply(context, "invalid_team"));
                 return;
             }
 
             var adminName = context.Sender?.Controller.PlayerName ?? L("console_name");
             var targetName = target.Controller.PlayerName;
+            var targetSteamId = target.SteamID;
             var prefix = L("prefix");
             var teamName = PlayerUtils.GetTeamName((int)team.Value, PluginLocalizer.Get(Core));
 
-            target.ChangeTeam(team.Value);
-
-            PlayerUtils.SendNotification(target, Messages,
-                $"<font color='#00ccff'><b>{L("team_changed_personal_html")}</b></font><br><br>{L("label_new_team")}: <font color='#00ff00'>{teamName}</font><br>{L("label_by")}: <font color='#ffcc00'>{ResolveVisibleAdminName(target, adminName)}</font>",
-                $" \x02{prefix}\x01 {L("team_changed_personal_chat", teamName, ResolveVisibleAdminName(target, adminName))}");
-
-            foreach (var player in Core.PlayerManager.GetAllPlayers().Where(p => p.IsValid))
+            // await sonrası ana thread'de değiliz; ChangeTeam/SendChat gibi native çağrılar
+            // SADECE ana thread'den yapılabilir. Oyuncu bu arada ayrılmış olabileceğinden
+            // canlı referansı yeniden alıp IsValid kontrolü yapıyoruz.
+            Core.Scheduler.NextTick(() =>
             {
-                var visibleAdmin = ResolveVisibleAdminName(player, adminName);
-                player.SendChat($" \x02{prefix}\x01 {L("team_changed_notification", visibleAdmin, targetName, teamName)}");
-            }
+                var liveTarget = Core.PlayerManager.GetAllPlayers().FirstOrDefault(p => p.IsValid && p.SteamID == targetSteamId);
+                if (liveTarget?.IsValid != true) return;
 
-            _ = AdminLogManager.AddLogAsync("team", adminName, context.Sender?.SteamID ?? 0, target.SteamID, target.IPAddress, $"team={teamName}", target.Controller.PlayerName);
-            Core.Logger.LogInformationIfEnabled("[CS2_Admin] {Admin} moved {Target} to {Team}", adminName, targetName, teamName);
+                liveTarget.ChangeTeam(team.Value);
+
+                PlayerUtils.SendNotification(Core, liveTarget, Messages,
+                    $"<font color='#00ccff'><b>{L("team_changed_personal_html")}</b></font><br><br>{L("label_new_team")}: <font color='#00ff00'>{teamName}</font><br>{L("label_by")}: <font color='#ffcc00'>{ResolveVisibleAdminName(liveTarget, adminName)}</font>",
+                    $" \x02{prefix}\x01 {L("team_changed_personal_chat", teamName, ResolveVisibleAdminName(liveTarget, adminName))}");
+
+                foreach (var player in Core.PlayerManager.GetAllPlayers().Where(p => p.IsValid))
+                {
+                    var visibleAdmin = ResolveVisibleAdminName(player, adminName);
+                    player.SendChat($" \x02{prefix}\x01 {L("team_changed_notification", visibleAdmin, targetName, teamName)}");
+                }
+
+                _ = AdminLogManager.AddLogAsync("team", adminName, context.Sender?.SteamID ?? 0, liveTarget.SteamID, liveTarget.IPAddress, $"team={teamName}", targetName);
+                Core.Logger.LogInformationIfEnabled("[CS2_Admin] {Admin} moved {Target} to {Team}", adminName, targetName, teamName);
+            });
         }
         catch (Exception ex)
         {

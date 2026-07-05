@@ -28,8 +28,12 @@ public class KickCommand : CommandBase
         _adminDbManager = adminDbManager;
     }
 
+
+
     public override async void Execute(ICommandContext context)
     {
+        
+
         try
         {
             var args = NormalizeArgs(context.Args, CommandsConfig.Kick);
@@ -53,8 +57,7 @@ public class KickCommand : CommandBase
                 return;
             }
 
-            var canTarget = await PlayerUtils.CanAdminTargetAsync(Core, _adminDbManager, context, target.SteamID, allowSelf: true);
-            if (!canTarget)
+            if (!await PlayerUtils.CanAdminTargetAsync(Core, _adminDbManager, context, target.SteamID, allowSelf: true))
                 return;
 
             string reason = args.Length > 1
@@ -65,24 +68,27 @@ public class KickCommand : CommandBase
             var targetName = target.Controller.PlayerName;
 
             var prefix = L("prefix");
-            foreach (var player in Core.PlayerManager.GetAllPlayers().Where(p => p.IsValid))
-            {
-                var visibleAdmin = ResolveVisibleAdminName(player, adminName);
-                player.SendChat($" \x02{prefix}\x01 {L("kicked_notification", visibleAdmin, targetName, reason)}");
-            }
-
-            PlayerUtils.SendNotification(target, Messages,
-                $"<font color='#ff0000'><b>{L("kicked_personal_html")}</b></font><br><br>{L("label_reason")}: <font color='#ffffff'>{reason}</font>",
-                $" \x02{prefix}\x01 {L("kicked_personal_chat", reason)}");
-
             var targetSteamId = target.SteamID;
-            Core.Scheduler.DelayBySeconds(2f, () =>
+            await OnMainThreadAsync(() =>
             {
-                var playerToKick = Core.PlayerManager.GetAllPlayers().FirstOrDefault(p => p.IsValid && p.SteamID == targetSteamId);
-                playerToKick?.Kick(reason, ENetworkDisconnectionReason.NETWORK_DISCONNECT_KICKED);
+                foreach (var player in Core.PlayerManager.GetAllPlayers().Where(p => p.IsValid))
+                {
+                    var visibleAdmin = ResolveVisibleAdminName(player, adminName);
+                    player.SendChat($" \x02{prefix}\x01 {L("kicked_notification", visibleAdmin, targetName, reason)}");
+                }
+
+                PlayerUtils.SendNotification(Core, target, Messages,
+                    $"<font color='#ff0000'><b>{L("kicked_personal_html")}</b></font><br><br>{L("label_reason")}: <font color='#ffffff'>{reason}</font>",
+                    $" \x02{prefix}\x01 {L("kicked_personal_chat", reason)}");
+
+                Core.Scheduler.DelayBySeconds(2f, () =>
+                {
+                    var playerToKick = Core.PlayerManager.GetAllPlayers().FirstOrDefault(p => p.IsValid && p.SteamID == targetSteamId);
+                    playerToKick?.Kick(reason, ENetworkDisconnectionReason.NETWORK_DISCONNECT_KICKED);
+                });
             });
 
-            await AdminLogManager.AddLogAsync("kick", adminName, context.Sender?.SteamID ?? 0, targetSteamId, target.IPAddress, $"reason={reason}", target.Controller.PlayerName, target.PlayerID, reason);
+            _ = AdminLogManager.AddLogAsync("kick", adminName, context.Sender?.SteamID ?? 0, targetSteamId, target.IPAddress, $"reason={reason}", targetName, target.PlayerID, reason);
             Core.Logger.LogInformationIfEnabled("[CS2_Admin] {Admin} kicked {Target}. Reason: {Reason}",
                 adminName, targetName, reason);
         }

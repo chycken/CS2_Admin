@@ -39,7 +39,7 @@ public class ListGroupsCommand : CommandBase
             }
 
             var groups = await _groupDbManager.GetAllGroupsAsync();
-            Core.Scheduler.NextTick(() =>
+            await OnMainThreadAsync(() =>
             {
                 if (groups.Count == 0)
                 {

@@ -65,6 +65,8 @@ public class RenameCommand : CommandBase
 
             await _playerNameHistoryManager.SetCustomNameAsync(target.SteamID, newName);
 
+            // await sonrası ana thread'de değiliz; Controller.PlayerName ataması gibi native
+            // çağrılar SADECE ana thread'den yapılabilir.
             Core.Scheduler.NextTick(() =>
             {
                 var liveTarget = Core.PlayerManager.GetAllPlayers().FirstOrDefault(p => p.IsValid && p.SteamID == target.SteamID);
@@ -75,7 +77,7 @@ public class RenameCommand : CommandBase
 
                 BroadcastNotification(adminName, "rename_notification", targetName, newName);
 
-                PlayerUtils.SendNotification(liveTarget, Messages,
+                PlayerUtils.SendNotification(Core, liveTarget, Messages,
                     $"<font color='#ffcc00'><b>{L("rename_personal_html")}</b></font><br><br>{L("label_new_name")}: <font color='#00ff00'>{newName}</font><br>{L("label_by")}: <font color='#ffcc00'>{ResolveVisibleAdminName(liveTarget, adminName)}</font>",
                     $" \x02{L("prefix")}\x01 {L("rename_personal_chat", newName, ResolveVisibleAdminName(liveTarget, adminName))}");
 
