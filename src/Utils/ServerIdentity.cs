@@ -59,12 +59,6 @@ public static class ServerIdentity
             return _configuredPublicIp;
         }
 
-        var hostIp = TryGetHostIp(core);
-        if (!string.IsNullOrWhiteSpace(hostIp))
-        {
-            return hostIp;
-        }
-
         try
         {
             var cvar = core.ConVar.Find<string>("ip");
@@ -212,7 +206,6 @@ public static class ServerIdentity
                 return normalized;
             }
             
-            // Fallback for some CS2 engine versions if needed
             return null;
         }
         catch
@@ -260,57 +253,6 @@ public static class ServerIdentity
         }
 
         return value.Trim();
-    }
-
-    private static string? TryGetHostIp(ISwiftlyCore core)
-    {
-        try
-        {
-            var hostIpInt = core.ConVar.Find<int>("hostip");
-            if (hostIpInt != null)
-            {
-                foreach (var value in ConvertHostIpToCandidates(unchecked((uint)hostIpInt.Value)))
-                {
-                    if (IsUsablePublicServerIp(value))
-                    {
-                        return value;
-                    }
-                }
-            }
-        }
-        catch
-        {
-        }
-
-        try
-        {
-            var hostIpLong = core.ConVar.Find<long>("hostip");
-            if (hostIpLong != null)
-            {
-                foreach (var value in ConvertHostIpToCandidates(unchecked((uint)hostIpLong.Value)))
-                {
-                    if (IsUsablePublicServerIp(value))
-                    {
-                        return value;
-                    }
-                }
-            }
-        }
-        catch
-        {
-        }
-
-        return null;
-    }
-
-    private static IEnumerable<string> ConvertHostIpToCandidates(uint hostIp)
-    {
-        var b1 = hostIp & 0xFF;
-        var b2 = (hostIp >> 8) & 0xFF;
-        var b3 = (hostIp >> 16) & 0xFF;
-        var b4 = (hostIp >> 24) & 0xFF;
-        yield return $"{b1}.{b2}.{b3}.{b4}";
-        yield return $"{b4}.{b3}.{b2}.{b1}";
     }
 
     private static string? TryGetPublicIpFromNetwork()
