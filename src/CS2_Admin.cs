@@ -25,7 +25,7 @@ using System.Text.Json.Nodes;
 
 namespace CS2_Admin;
 
-[PluginMetadata(Id = "CS2_Admin", Version = "1.0.18", Name = "CS2_Admin", Author = "CanDaysa", Description = "Comprehensive admin plugin for CS2.")]
+[PluginMetadata(Id = "CS2_Admin", Version = "1.0.19", Name = "CS2_Admin", Author = "CanDaysa", Description = "Comprehensive admin plugin for CS2.")]
 public partial class CS2_Admin : BasePlugin
 {
     private PluginConfig _config = null!;
@@ -131,7 +131,7 @@ public partial class CS2_Admin : BasePlugin
     // SwiftlyS2'de CommandService.commandsByPlugin sözlüğü STATIC'tir (host'ta tek kopya,
     // eklenti adına göre anahtarlı) ve DispatchCommand eşleşen TÜM callback'leri çağırır.
     // Eklenti unload olduğunda framework bu static sözlükten eski callback'leri SİLMEZ;
-    // bu yüzden her reload'da eski + yeni callback'ler birikir ve komutlar 2,3,4,5 kez çalışır.
+    // bu yüzden her reload'da eski + yeni callback'ler birikir és komutok 2,3,4,5 kez çalışır.
     // Çözüm: her wrapper bu instance bayrağını kontrol eder. Unload() bayrağı false yapınca
     // eski (stale) handler'lar sözlükte kalsalar bile hiçbir şey yapmadan döner. Böylece
     // sözlüğü mutasyona uğratmadan (yani SwiftlyS2'yi crash etmeden) duplikasyon engellenir.
@@ -161,7 +161,7 @@ public partial class CS2_Admin : BasePlugin
         _afkManager.Start();
         _ = InitializeDatabasesAsync();
         
-        var versionAttr = (PluginMetadata)Attribute.GetCustomAttribute(typeof(CS2_Admin), typeof(PluginMetadata));
+        var versionAttr = Attribute.GetCustomAttribute(typeof(CS2_Admin), typeof(PluginMetadata)) as PluginMetadata;
         if (versionAttr != null)
         {
             if (_config.AutoUpdate)
