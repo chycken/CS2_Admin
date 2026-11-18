@@ -12,6 +12,7 @@
 This plugin provides a database-driven foundation for managing admins, permissions, player sanctions, and server features. Designed to be feature-rich yet highly customizable, it completely overhauls the standard admin experience.
 
 **Original plugin:** [candaysa/CS2_Admin](https://github.com/candaysa/CS2_Admin)  
+**Forked version:** [agasking1337/CS2_Admin](https://github.com/agasking1337/CS2_Admin)  
 
 ## Download Shortcuts
 <ul>
